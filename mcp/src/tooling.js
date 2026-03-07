@@ -139,6 +139,9 @@ export function createResponseCollector(name, command) {
     let meta = null;
 
     return (msg) => {
+      const msgRequestId = msg.request_id ?? msg.rid;
+      const msgSource = msg.source ?? msg.src;
+      const msgError = msg.error ?? msg.e;
       if (typeof msg.ok === 'boolean' && msg.ok === false) {
         return {
           done: true,
@@ -146,7 +149,7 @@ export function createResponseCollector(name, command) {
           data: { request_id: requestId, error: msg.error || 'device_rejected', device: msg }
         };
       }
-      if (msg.request_id !== requestId) {
+      if (msgRequestId !== requestId) {
         return null;
       }
       if (msg.type === 'screenshot.error') {
@@ -155,27 +158,32 @@ export function createResponseCollector(name, command) {
           ok: false,
           data: {
             request_id: requestId,
-            source: msg.source || command.source,
-            error: msg.error || 'screenshot_error',
+            source: msgSource || command.source,
+            error: msgError || 'screenshot_error',
             detail: msg
           }
         };
       }
       if (msg.type === 'screenshot.meta') {
         meta = msg;
-      } else if (msg.type === 'screenshot.chunk' && Number.isInteger(msg.seq) && typeof msg.data === 'string') {
-        chunksBySeq.set(msg.seq, msg.data);
+      } else if (msg.type === 'screenshot.chunk') {
+        const seq = msg.seq ?? msg.q;
+        const data = msg.data ?? msg.d;
+        if (Number.isInteger(seq) && typeof data === 'string') {
+          chunksBySeq.set(seq, data);
+        }
       }
 
-      if (!meta || !Number.isInteger(meta.total_chunks) || meta.total_chunks < 0) {
+      const totalChunks = meta ? (meta.total_chunks ?? meta.tc) : null;
+      if (!meta || !Number.isInteger(totalChunks) || totalChunks < 0) {
         return null;
       }
-      if (chunksBySeq.size < meta.total_chunks) {
+      if (chunksBySeq.size < totalChunks) {
         return null;
       }
 
       const ordered = [];
-      for (let seq = 0; seq < meta.total_chunks; seq += 1) {
+      for (let seq = 0; seq < totalChunks; seq += 1) {
         if (!chunksBySeq.has(seq)) {
           return null;
         }
@@ -188,10 +196,12 @@ export function createResponseCollector(name, command) {
         ok: true,
         data: {
           request_id: requestId,
-          source: meta.source || command.source,
-          mime: meta.mime || 'application/octet-stream',
-          total_chunks: meta.total_chunks,
-          total_chars: typeof meta.total_chars === 'number' ? meta.total_chars : base64.length,
+          source: (meta.source ?? meta.src) || command.source,
+          mime: (meta.mime ?? meta.m) || 'application/octet-stream',
+          total_chunks: totalChunks,
+          total_chars: typeof (meta.total_chars ?? meta.tch) === 'number'
+            ? (meta.total_chars ?? meta.tch)
+            : base64.length,
           base64
         }
       };

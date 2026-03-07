@@ -170,27 +170,25 @@ function dataUrlToMetaAndChunks(dataUrl, requestId, source, encodeStats = null) 
   const totalChunks = Math.ceil(base64.length / chunkSize);
   const meta = {
     type: 'screenshot.meta',
-    request_id: requestId,
-    source,
-    mime,
-    chunk_size: chunkSize,
-    total_chunks: totalChunks,
-    total_chars: base64.length,
-    encoded_width: encodeStats?.encodedWidth || null,
-    encoded_height: encodeStats?.encodedHeight || null,
-    encoded_quality: encodeStats?.encodedQuality || null,
-    encode_attempts: encodeStats?.attempts || null,
-    ts: Date.now()
+    rid: requestId,
+    src: source,
+    m: mime,
+    cs: chunkSize,
+    tc: totalChunks,
+    tch: base64.length,
+    ew: encodeStats?.encodedWidth || null,
+    eh: encodeStats?.encodedHeight || null,
+    eq: encodeStats?.encodedQuality || null,
+    ea: encodeStats?.attempts || null
   };
   const chunks = [];
   for (let seq = 0; seq < totalChunks; seq += 1) {
     chunks.push({
       type: 'screenshot.chunk',
-      request_id: requestId,
-      source,
-      seq,
-      data: base64.slice(seq * chunkSize, (seq + 1) * chunkSize),
-      ts: Date.now()
+      rid: requestId,
+      src: source,
+      q: seq,
+      d: base64.slice(seq * chunkSize, (seq + 1) * chunkSize)
     });
   }
   return { meta, chunks };

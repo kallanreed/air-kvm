@@ -83,3 +83,20 @@ test('screenshot collector returns structured error payload', () => {
   assert.equal(done.data.request_id, 'shot-2');
   assert.equal(done.data.error, 'desktop_capture_denied');
 });
+
+test('screenshot collector supports compact screenshot frame keys', () => {
+  const command = { type: 'screenshot.request', source: 'tab', request_id: 'shot-compact' };
+  const collect = createResponseCollector('airkvm_screenshot_tab', command);
+
+  assert.equal(collect({ type: 'screenshot.meta', rid: 'shot-compact', src: 'tab', m: 'image/jpeg', tc: 2, tch: 6 }), null);
+  assert.equal(collect({ type: 'screenshot.chunk', rid: 'shot-compact', src: 'tab', q: 0, d: 'ABC' }), null);
+  const done = collect({ type: 'screenshot.chunk', rid: 'shot-compact', src: 'tab', q: 1, d: 'DEF' });
+
+  assert.equal(done.done, true);
+  assert.equal(done.ok, true);
+  assert.equal(done.data.request_id, 'shot-compact');
+  assert.equal(done.data.source, 'tab');
+  assert.equal(done.data.mime, 'image/jpeg');
+  assert.equal(done.data.total_chunks, 2);
+  assert.equal(done.data.base64, 'ABCDEF');
+});
