@@ -349,6 +349,13 @@ notifySw('bridge_loaded');
 debugLog('bridge_loaded');
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg?.type === 'desktop.capture.request' && msg.target === 'ble-page') {
+    debugLog('desktop.capture.request');
+    captureDesktopDataUrl()
+      .then((dataUrl) => sendResponse({ ok: true, dataUrl }))
+      .catch((err) => sendResponse({ ok: false, error: String(err?.message || err) }));
+    return true;
+  }
   if (!msg || msg.type !== 'ble.post' || msg.target !== 'ble-page') return;
   debugLog('ble.post from service worker', {
     traceId: msg.traceId || null,
@@ -367,3 +374,61 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     });
   return true;
 });
+
+async function captureDesktopDataUrl() {
+  if (!chrome.desktopCapture?.chooseDesktopMedia) {
+    throw new Error('desktop_capture_unavailable');
+  }
+
+  const streamId = await new Promise((resolve, reject) => {
+    chrome.desktopCapture.chooseDesktopMedia(['screen', 'window'], (id) => {
+      if (!id) {
+        reject(new Error('desktop_capture_denied'));
+        return;
+      }
+      resolve(id);
+    });
+  });
+
+  const stream = await getUserMediaCompat({
+    audio: false,
+    video: {
+      mandatory: {
+        chromeMediaSource: 'desktop',
+        chromeMediaSourceId: streamId
+      }
+    }
+  });
+
+  try {
+    const [track] = stream.getVideoTracks();
+    if (!track) throw new Error('desktop_capture_no_track');
+    const imageCapture = new ImageCapture(track);
+    const bitmap = await imageCapture.grabFrame();
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('desktop_capture_canvas_unavailable');
+    ctx.drawImage(bitmap, 0, 0);
+    return canvas.toDataURL('image/png');
+  } finally {
+    stream.getTracks().forEach((t) => t.stop());
+  }
+}
+
+function getUserMediaCompat(constraints) {
+  const modern = globalThis.navigator?.mediaDevices?.getUserMedia;
+  if (typeof modern === 'function') {
+    return modern.call(globalThis.navigator.mediaDevices, constraints);
+  }
+  const legacy = globalThis.navigator?.getUserMedia
+    || globalThis.navigator?.webkitGetUserMedia
+    || globalThis.navigator?.mozGetUserMedia;
+  if (typeof legacy !== 'function') {
+    throw new Error('desktop_capture_media_unavailable');
+  }
+  return new Promise((resolve, reject) => {
+    legacy.call(globalThis.navigator, constraints, resolve, reject);
+  });
+}

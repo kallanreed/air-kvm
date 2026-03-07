@@ -104,6 +104,9 @@
 - Desktop chooser prompt fix:
   - `desktop_capture_denied` could occur without visible picker when chooser was not tab-scoped.
   - Updated `chooseDesktopMedia` call to pass resolved target tab so user approval prompt is attached to a real browser tab.
+- Edge desktop capture compatibility attempt:
+  - Moved desktop frame capture flow into bridge page context and exposed `desktop.capture.request` runtime route.
+  - Added `getUserMedia` compatibility fallback (`mediaDevices.getUserMedia` and legacy `getUserMedia/webkitGetUserMedia/mozGetUserMedia`).
 - Bridge health watchdog:
   - Added periodic BLE health ping (`state.request`) in bridge page.
   - If ping ACKs fail consecutively (`kHealthMaxMisses`), bridge now auto-disconnects and updates status.

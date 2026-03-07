@@ -144,43 +144,14 @@ async function captureTabPng(config) {
 }
 
 async function captureDesktopPng(config) {
-  if (!chrome.desktopCapture?.chooseDesktopMedia) {
-    throw new Error('desktop_capture_unavailable');
-  }
-  const targetTab = await resolveTargetTab();
-  if (!targetTab?.id) {
-    throw new Error('active_tab_not_found');
-  }
-
-  const streamId = await new Promise((resolve, reject) => {
-    chrome.desktopCapture.chooseDesktopMedia(['screen', 'window'], targetTab, (id) => {
-      if (!id) {
-        reject(new Error('desktop_capture_denied'));
-        return;
-      }
-      resolve(id);
-    });
+  const response = await chrome.runtime.sendMessage({
+    type: 'desktop.capture.request',
+    target: 'ble-page'
   });
-
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: false,
-    video: {
-      mandatory: {
-        chromeMediaSource: 'desktop',
-        chromeMediaSourceId: streamId
-      }
-    }
-  });
-
-  try {
-    const [track] = stream.getVideoTracks();
-    if (!track) throw new Error('desktop_capture_no_track');
-    const imageCapture = new ImageCapture(track);
-    const bitmap = await imageCapture.grabFrame();
-    return encodeBitmapToJpegDataUrl(bitmap, config);
-  } finally {
-    stream.getTracks().forEach((t) => t.stop());
+  if (!response?.ok || typeof response.dataUrl !== 'string') {
+    throw new Error(response?.error || 'desktop_capture_failed');
   }
+  return compressDataUrlToJpeg(response.dataUrl, config);
 }
 
 function fitWithin(width, height, maxWidth, maxHeight) {
