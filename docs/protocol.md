@@ -41,6 +41,15 @@ Tool: `airkvm_send`
 - Input: `{ "command": <serial command object> }`
 - Output text: transport-forwarding status or device rejection/timeout
 
+Tool: `airkvm_screenshot_tab` / `airkvm_screenshot_desktop`
+- Optional input tuning:
+  - `request_id` (string)
+  - `max_width` (int, 160..1920)
+  - `max_height` (int, 120..1080)
+  - `quality` (float, 0.3..0.9)
+  - `max_chars` (int, 20000..200000)
+- Output text content is JSON with reassembled screenshot payload.
+
 ## BLE Manual Testing
 
 Device GATT profile:
@@ -113,8 +122,18 @@ Invalid payload behavior:
 ## Planned additions
 
 1. Screenshot framing
-- `screenshot.meta` control object
-- binary chunk stream with frame id + sequence
+- Compact framed metadata object:
+  - `type: "screenshot.meta"`
+  - `rid` request id
+  - `src` source (`tab|desktop`)
+  - `m` mime (`image/jpeg`)
+  - `cs` chunk size
+  - `tc` total chunks
+  - `tch` total base64 chars
+  - optional encode stats: `ew`, `eh`, `eq`, `ea`
+- Compact chunk stream:
+  - `type: "screenshot.chunk"`
+  - `rid`, `src`, `q` (seq), `d` (base64 data slice)
 
 2. Busy/DOM channel
 - extension emits `busy.changed`, `dom.summary`
