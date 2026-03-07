@@ -59,6 +59,10 @@
     - service: `6E400101-B5A3-F393-E0A9-E50E24DCCB01`
     - RX: `6E400102-B5A3-F393-E0A9-E50E24DCCB01`
     - TX: `6E400103-B5A3-F393-E0A9-E50E24DCCB01`
+- Device disambiguation hardening:
+  - Firmware BLE advertised name changed to `air-kvm-ctrl-cb01`.
+  - Extension chooser filter now requires exact `name: "air-kvm-ctrl-cb01"` with UART service UUID.
+  - Goal is to avoid connecting to similarly named non-control peripherals.
 - Bridge diagnostics now include deeper BLE stream introspection:
   - Logs connected device info immediately after GATT connect (before handshake success/failure).
   - Logs raw notification hex bytes (`rx notify`) from TX characteristic.
