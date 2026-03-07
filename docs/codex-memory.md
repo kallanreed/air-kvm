@@ -69,6 +69,11 @@
   - Fixed by using explicit byte+length overload:
     - `setValue(reinterpret_cast<const uint8_t*>(payload), strlen(payload))`
   - Applied in `transport_mux.cpp` and boot payload initialization in `app.cpp`.
+- Review-driven hardening updates:
+  - Bridge connect flow is now guarded against re-entry (`connectInFlight`) to prevent overlapping handshake loops.
+  - Disconnect now clears `bleDevice` in addition to characteristic handles/buffers.
+  - Bridge now forwards ack-only control frames (for example `{ "ok": true }`) to service worker instead of dropping non-`type` payloads.
+  - Firmware boot identity string now matches control device naming (`air-kvm-ctrl-cb01`).
 - Bridge diagnostics now include deeper BLE stream introspection:
   - Logs connected device info immediately after GATT connect (before handshake success/failure).
   - Logs raw notification hex bytes (`rx notify`) from TX characteristic.

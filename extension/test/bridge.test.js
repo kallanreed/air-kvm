@@ -1,7 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { __resetBleForTest, connectBle, postEvent } from '../src/bridge.js';
+import {
+  __resetBleForTest,
+  connectBle,
+  disconnectBle,
+  getConnectedDeviceInfo,
+  postEvent
+} from '../src/bridge.js';
 
 test('connectBle establishes UART RX characteristic via navigator.bluetooth', async () => {
   __resetBleForTest();
@@ -43,4 +49,42 @@ test('postEvent fails when BLE transport is unavailable', async () => {
   __resetBleForTest();
   const ok = await postEvent({ type: 'busy.changed', busy: true });
   assert.equal(ok, false);
+});
+
+test('disconnectBle clears connected device metadata', async () => {
+  __resetBleForTest();
+  const rx = {
+    writeValueWithoutResponse: async () => {}
+  };
+  const service = {
+    getCharacteristic: async () => rx
+  };
+  const server = {
+    connected: true,
+    getPrimaryService: async () => service
+  };
+  const gatt = {
+    connected: true,
+    connect: async () => server,
+    disconnect: () => {
+      gatt.connected = false;
+    }
+  };
+  const device = {
+    id: 'dev-1',
+    name: 'air-kvm-ctrl-cb01',
+    gatt,
+    addEventListener: () => {}
+  };
+  const navigatorLike = {
+    bluetooth: {
+      requestDevice: async () => device
+    }
+  };
+
+  const connected = await connectBle({ navigatorLike });
+  assert.equal(connected, true);
+  assert.equal(getConnectedDeviceInfo().id, 'dev-1');
+  disconnectBle();
+  assert.deepEqual(getConnectedDeviceInfo(), { id: null, name: null, connected: false });
 });

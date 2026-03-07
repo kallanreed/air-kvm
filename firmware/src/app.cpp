@@ -17,7 +17,7 @@ constexpr const char* kTxCharUuid = "6E400103-B5A3-F393-E0A9-E50E24DCCB01";
 #define AIRKVM_FW_BUILT_AT __DATE__ " " __TIME__
 
 constexpr const char* kBootMsg =
-    "{\"type\":\"boot\",\"fw\":\"air-kvm-poc\",\"version\":\"" AIRKVM_FW_VERSION
+    "{\"type\":\"boot\",\"fw\":\"air-kvm-ctrl-cb01\",\"version\":\"" AIRKVM_FW_VERSION
     "\",\"built_at\":\"" AIRKVM_FW_BUILT_AT "\"}";
 }  // namespace
 

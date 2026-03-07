@@ -20,6 +20,7 @@ const kHandshakeAttempts = 3;
 const kPreferredDeviceStorageKey = 'blePreferredDeviceId';
 const kMaxLogLines = 250;
 let logLines = [];
+let connectInFlight = false;
 
 function appendLog(line) {
   if (!logEl) return;
@@ -59,6 +60,11 @@ setBleDebugLogger((...args) => {
 
 function setStatus(text) {
   if (statusEl) statusEl.textContent = text;
+}
+
+function setControlsDisabled(disabled) {
+  if (connectBtn) connectBtn.disabled = disabled;
+  if (reconnectBtn) reconnectBtn.disabled = disabled;
 }
 
 function notifySw(status, detail = null) {
@@ -115,6 +121,12 @@ function waitForControlHandshake(state) {
 }
 
 async function connectAndBind() {
+  if (connectInFlight) {
+    debugLog('connect ignored: already in progress');
+    return;
+  }
+  connectInFlight = true;
+  setControlsDisabled(true);
   debugLog('connect click');
   notifySw('connect_click');
   setStatus('Connecting...');
@@ -135,7 +147,6 @@ async function connectAndBind() {
         if (state.pendingHandshake && (unwrapped.type === 'state' || typeof unwrapped.ok === 'boolean')) {
           state.pendingHandshake();
         }
-        if (typeof unwrapped.type !== 'string') return;
         try {
           await chrome.runtime.sendMessage({ type: 'ble.command', command: unwrapped });
           debugLog('forwarded ble.command to service worker');
@@ -187,6 +198,9 @@ async function connectAndBind() {
     debugLog('connect error', String(err?.message || err));
     notifySw('connect_error', String(err?.message || err));
     setStatus(`Error: ${String(err?.message || err)}`);
+  } finally {
+    connectInFlight = false;
+    setControlsDisabled(false);
   }
 }
 

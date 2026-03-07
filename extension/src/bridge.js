@@ -189,6 +189,7 @@ export function disconnectBle() {
       // Ignore disconnect errors.
     }
   }
+  bleDevice = null;
   rxCharacteristic = null;
   txCharacteristic = null;
   bleLineBuffer = '';
