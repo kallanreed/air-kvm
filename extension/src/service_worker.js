@@ -1,5 +1,6 @@
 import { connectBle, postEvent, setBleCommandHandler } from './bridge.js';
 import { dataUrlToMetaAndChunks, resolveScreenshotConfig } from './screenshot_protocol.js';
+const kBleBridgePagePath = 'src/ble_bridge.html';
 
 function setBadge(text, color) {
   if (!chrome?.action?.setBadgeText || !chrome?.action?.setBadgeBackgroundColor) return;
@@ -14,10 +15,32 @@ function clearBadgeLater(ms = 5000) {
   }, ms);
 }
 
+async function ensureBleBridgePage() {
+  if (!chrome?.tabs?.query || !chrome?.tabs?.create) return false;
+  const url = chrome.runtime.getURL(kBleBridgePagePath);
+  const existing = await chrome.tabs.query({ url });
+  if (existing.length > 0) return true;
+  await chrome.tabs.create({ url, active: true });
+  return true;
+}
+
+async function postEventWithFallback(payload) {
+  const direct = await postEvent(payload);
+  if (direct) return true;
+
+  try {
+    const res = await chrome.runtime.sendMessage({ type: 'ble.post', target: 'ble-page', payload });
+    return Boolean(res?.ok);
+  } catch {
+    return false;
+  }
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || typeof msg.type !== 'string') return;
+  if (msg.target === 'ble-page') return;
 
-  postEvent({ ...msg, tabId: sender?.tab?.id ?? null })
+  postEventWithFallback({ ...msg, tabId: sender?.tab?.id ?? null })
     .then((ok) => sendResponse({ ok }))
     .catch(() => sendResponse({ ok: false }));
   return true;
@@ -146,7 +169,7 @@ async function sendDomSnapshot(command) {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (!tab?.id) throw new Error('active_tab_not_found');
   const summary = await chrome.tabs.sendMessage(tab.id, { type: 'request.dom.summary' });
-  await postEvent({
+  await postEventWithFallback({
     type: 'dom.snapshot',
     request_id: requestId,
     tabId: tab.id,
@@ -161,37 +184,53 @@ async function sendScreenshot(command) {
   const config = resolveScreenshotConfig(command);
   const encoded = source === 'desktop' ? await captureDesktopPng(config) : await captureTabPng(config);
   const { meta, chunks } = dataUrlToMetaAndChunks(encoded.dataUrl, requestId, source, encoded);
-  await postEvent(meta);
+  await postEventWithFallback(meta);
   for (const chunk of chunks) {
     // BLE payloads are chunked to reduce risk of exceeding negotiated MTU.
-    await postEvent(chunk);
+    await postEventWithFallback(chunk);
   }
 }
 
-setBleCommandHandler((command) => {
+async function handleBleCommand(command) {
   if (!command || typeof command.type !== 'string') return;
   if (command.type === 'dom.snapshot.request') {
-    sendDomSnapshot(command).catch(async (err) => {
-      await postEvent({
+    try {
+      await sendDomSnapshot(command);
+    } catch (err) {
+      await postEventWithFallback({
         type: 'dom.snapshot.error',
         request_id: command.request_id || null,
         error: String(err?.message || err),
         ts: Date.now()
       });
-    });
+    }
     return;
   }
   if (command.type === 'screenshot.request') {
-    sendScreenshot(command).catch(async (err) => {
-      await postEvent({
+    try {
+      await sendScreenshot(command);
+    } catch (err) {
+      await postEventWithFallback({
         type: 'screenshot.error',
         request_id: command.request_id || null,
         source: command.source || 'tab',
         error: String(err?.message || err),
         ts: Date.now()
       });
-    });
+    }
   }
+}
+
+setBleCommandHandler((command) => {
+  handleBleCommand(command);
+});
+
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (!msg || msg.type !== 'ble.command') return;
+  handleBleCommand(msg.command)
+    .then(() => sendResponse({ ok: true }))
+    .catch((err) => sendResponse({ ok: false, error: String(err?.message || err) }));
+  return true;
 });
 
 chrome.action.onClicked.addListener(async (tab) => {
@@ -199,7 +238,8 @@ chrome.action.onClicked.addListener(async (tab) => {
   try {
     const connected = await connectBle();
     if (!connected) {
-      setBadge('NO', '#9E9E9E');
+      await ensureBleBridgePage();
+      setBadge('TAB', '#9E9E9E');
       clearBadgeLater();
       return;
     }
@@ -209,7 +249,7 @@ chrome.action.onClicked.addListener(async (tab) => {
       return;
     }
     const summary = await chrome.tabs.sendMessage(tab.id, { type: 'request.dom.summary' });
-    await postEvent({ ...summary, tabId: tab.id });
+    await postEventWithFallback({ ...summary, tabId: tab.id });
     clearBadgeLater();
   } catch {
     setBadge('ERR', '#D93025');

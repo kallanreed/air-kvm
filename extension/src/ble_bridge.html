@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>AirKVM BLE Bridge</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        margin: 16px;
+        color: #1f1f1f;
+      }
+      button {
+        padding: 8px 12px;
+        font-size: 14px;
+      }
+      #status {
+        margin-top: 10px;
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <h3>AirKVM BLE Bridge</h3>
+    <p>Keep this tab open in Edge while using AirKVM.</p>
+    <button id="connect">Connect BLE</button>
+    <div id="status">Disconnected</div>
+    <script type="module" src="./ble_bridge.js"></script>
+  </body>
+  </html>
+

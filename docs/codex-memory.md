@@ -27,6 +27,12 @@
 - Extension action click feedback:
   - Added badge status on click so failures are visible (`...`, `BLE`, `NO`, `ERR`).
   - Previous behavior silently swallowed failures and appeared as “nothing happens”.
+  - `NO` specifically means `navigator.bluetooth.requestDevice` is unavailable in the current extension context.
+- Edge runtime note: action click currently reports `NO` in Edge because BLE request API is not available in this background context.
+- Edge fallback transport host:
+  - Added `src/ble_bridge.html` + `src/ble_bridge.js` as a user-opened bridge page for BLE when service worker context lacks Web Bluetooth.
+  - Service worker now forwards BLE post/command traffic via runtime messages to that page (`ble.post`, `ble.command`).
+  - Action click now opens bridge page and shows `TAB` badge when direct BLE connect is unavailable.
 
 ## In-Progress / Not Complete
 - BLE HID (HOGP) is not implemented (main blocker).
