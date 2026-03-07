@@ -10,6 +10,10 @@ function makeToolResultText(text) {
   return { content: [{ type: 'text', text }] };
 }
 
+function makeRequestId() {
+  return `req_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
+}
+
 const SERIAL_PORT = process.env.AIRKVM_SERIAL_PORT || '/dev/cu.usbserial-0001';
 const SERIAL_BAUD = Number.parseInt(process.env.AIRKVM_SERIAL_BAUD || '115200', 10);
 const SERIAL_TIMEOUT_MS = Number.parseInt(process.env.AIRKVM_SERIAL_TIMEOUT_MS || '3000', 10);
@@ -55,6 +59,17 @@ function onToolsList(id) {
             },
             required: ['command']
           }
+        },
+        {
+          name: 'airkvm_dom_snapshot',
+          description: 'Request a DOM snapshot from the target extension over the AirKVM transport.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              request_id: { type: 'string' }
+            },
+            required: []
+          }
         }
       ]
     }
@@ -63,9 +78,17 @@ function onToolsList(id) {
 
 function onToolCall(id, params) {
   const name = params?.name;
-  const command = params?.arguments?.command;
+  let command = params?.arguments?.command;
 
-  if (name !== 'airkvm_send') {
+  if (name === 'airkvm_dom_snapshot') {
+    const requestId = params?.arguments?.request_id;
+    command = {
+      type: 'dom.snapshot.request',
+      request_id: typeof requestId === 'string' && requestId.length > 0 ? requestId : makeRequestId()
+    };
+  }
+
+  if (name !== 'airkvm_send' && name !== 'airkvm_dom_snapshot') {
     send({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Unknown tool' } });
     return;
   }
