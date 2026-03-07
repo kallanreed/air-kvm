@@ -9,6 +9,7 @@
 - Firmware BLE profile is currently custom UART-like (`6E400101-B5A3-F393-E0A9-E50E24DCCB01`), not HOGP.
 - Therefore device does not enumerate as HID on macOS yet.
 - MCP busy-state check works over UART (`state.request` -> `state` response confirmed live).
+- DOM snapshot now works end-to-end over BLE bridge + UART MCP path.
 
 ## Session Changes Landed
 - Removed extension localhost/MCP HTTP path and related manifest host permissions.
@@ -85,10 +86,14 @@
   - Logs raw notification hex bytes (`rx notify`) from TX characteristic.
   - On handshake timeout, attempts `readValue()` snapshot on TX characteristic and logs bytes/hex/text.
   - Logs full GATT service/characteristic inventory (`gatt services`) and selected service/RX/TX UUID+properties on connect.
+- DOM E2E validation (March 7, 2026):
+  - MCP tool `airkvm_dom_snapshot` returned successful structured payload.
+  - Verified title/url in returned snapshot (`Google`, `https://www.google.com/`).
+  - Confirms BLE request -> extension capture -> UART relay -> MCP collector roundtrip is functioning.
 
 ## In-Progress / Not Complete
 - BLE HID (HOGP) is not implemented (main blocker).
-- DOM snapshot + tab/desktop screenshot end-to-end retrieval via MCP tools is not complete.
+- Tab/desktop screenshot end-to-end retrieval via MCP tools still needs live validation.
 - Some scaffolding for new message types exists, but not yet a finalized tested pipeline.
 
 ## Next Work Order (Priority)

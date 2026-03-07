@@ -38,7 +38,7 @@ Implement Milestone A from `docs/plan.md`: ESP32 advertises BLE HID (HOGP) and c
    - `cd firmware && pio run -e esp32dev -t upload`
 2. Open monitor and confirm boot line includes `version` and `built_at`:
    - `cd firmware && pio device monitor --port /dev/cu.usbserial-0001`
-3. On macOS target machine, pair BLE device named `air-kvm-poc` in Bluetooth settings.
+3. On macOS target machine, pair BLE device named `air-kvm-ctrl-cb01` (or legacy `air-kvm-poc` during transition) in Bluetooth settings.
 4. Confirm HID enumeration in macOS:
    - System Settings -> Bluetooth shows connected input device.
 5. From host machine, run MCP:
@@ -50,7 +50,7 @@ Implement Milestone A from `docs/plan.md`: ESP32 advertises BLE HID (HOGP) and c
 7. Confirm target machine receives input events (cursor moves, click fires, Enter key injected).
 
 ## Remaining work (hardware E2E only)
-1. Validate real screenshot retrieval latency/size on target machine for:
+1. DOM snapshot E2E is complete; validate real screenshot retrieval latency/size on target machine for:
    - `airkvm_screenshot_tab` default config
    - `airkvm_screenshot_desktop` default config
    - one tuned request (`max_width`, `max_height`, `quality`, `max_chars`)

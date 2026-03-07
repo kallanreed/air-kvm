@@ -4,12 +4,19 @@ cd /Users/kylereed/project/air-kvm/firmware && pio run -e esp32dev -t upload --u
 Commands
 {"type":"state.request"}
 {"type":"state.set","busy":true}
+{"type":"dom.snapshot.request","request_id":"manual-dom-1"}
 
   - mouse.move_rel
   - mouse.move_abs
   - mouse.click
   - key.tap
   - state.request
+  - dom.snapshot.request
+
+Milestone (March 7, 2026):
+- DOM snapshot E2E is now working via MCP tool `airkvm_dom_snapshot`.
+- Verified returned snapshot for `https://www.google.com/` with title `Google`.
+- Next live validation target: screenshot tools (`airkvm_screenshot_tab`, `airkvm_screenshot_desktop`).
 
 
   You will operate in two roles:
