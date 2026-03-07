@@ -55,6 +55,15 @@ void test_parse_screenshot_chunk() {
   TEST_ASSERT_EQUAL_STRING("tab", cmd->source.c_str());
 }
 
+void test_parse_tabs_list_request() {
+  const auto cmd = airkvm::ParseCommandLine(
+      "{\"type\":\"tabs.list.request\",\"request_id\":\"tabs-1\"}");
+  TEST_ASSERT_TRUE(cmd.has_value());
+  TEST_ASSERT_EQUAL_INT(
+      static_cast<int>(airkvm::CommandType::kTabsListRequest), static_cast<int>(cmd->type));
+  TEST_ASSERT_EQUAL_STRING("tabs-1", cmd->request_id.c_str());
+}
+
 void test_ack_json_ok() {
   const auto s = airkvm::AckJson("abc", true);
   TEST_ASSERT_EQUAL_STRING("{\"id\":\"abc\",\"ok\":true}", s.c_str());
@@ -69,6 +78,7 @@ int main(int, char**) {
   RUN_TEST(test_parse_fw_version_request);
   RUN_TEST(test_parse_dom_snapshot_request);
   RUN_TEST(test_parse_screenshot_chunk);
+  RUN_TEST(test_parse_tabs_list_request);
   RUN_TEST(test_ack_json_ok);
   return UNITY_END();
 }

@@ -20,6 +20,10 @@ Milestone (March 7, 2026):
 - Pre-check before MCP DOM/screenshot calls: bridge tab must be connected (status shows `Connected`).
 - If not connected, firmware still ACKs request but MCP times out waiting for `dom.snapshot` / `screenshot.*` frames.
 - Bridge now runs a health ping watchdog (`state.request`) and auto-disconnects/status-updates on repeated missed ACKs.
+- New MCP tools/features:
+  - `airkvm_list_tabs` to enumerate candidate tabs.
+  - `airkvm_screenshot_tab` now supports `tab_id` targeting.
+  - `airkvm_screenshot_*` supports `encoding: \"b64z\"` (gzip-compressed payload transport).
 
 
   You will operate in two roles:

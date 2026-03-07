@@ -1,3 +1,5 @@
+import { gunzipSync } from 'node:zlib';
+
 export const TOOL_DEFINITIONS = [
   {
     name: 'airkvm_send',
@@ -14,6 +16,17 @@ export const TOOL_DEFINITIONS = [
         }
       },
       required: ['command']
+    }
+  },
+  {
+    name: 'airkvm_list_tabs',
+    description: 'List automatable browser tabs available on the target extension.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        request_id: { type: 'string' }
+      },
+      required: []
     }
   },
   {
@@ -37,7 +50,9 @@ export const TOOL_DEFINITIONS = [
         max_width: { type: 'integer', minimum: 160, maximum: 1920 },
         max_height: { type: 'integer', minimum: 120, maximum: 1080 },
         quality: { type: 'number', minimum: 0.3, maximum: 0.9 },
-        max_chars: { type: 'integer', minimum: 20000, maximum: 200000 }
+        max_chars: { type: 'integer', minimum: 20000, maximum: 200000 },
+        tab_id: { type: 'integer' },
+        encoding: { type: 'string', enum: ['b64', 'b64z'] }
       },
       required: []
     }
@@ -52,7 +67,8 @@ export const TOOL_DEFINITIONS = [
         max_width: { type: 'integer', minimum: 160, maximum: 1920 },
         max_height: { type: 'integer', minimum: 120, maximum: 1080 },
         quality: { type: 'number', minimum: 0.3, maximum: 0.9 },
-        max_chars: { type: 'integer', minimum: 20000, maximum: 200000 }
+        max_chars: { type: 'integer', minimum: 20000, maximum: 200000 },
+        encoding: { type: 'string', enum: ['b64', 'b64z'] }
       },
       required: []
     }
@@ -70,6 +86,7 @@ export function isKnownTool(name) {
 export function isStructuredTool(name) {
   return (
     name === 'airkvm_dom_snapshot' ||
+    name === 'airkvm_list_tabs' ||
     name === 'airkvm_screenshot_tab' ||
     name === 'airkvm_screenshot_desktop'
   );
@@ -90,7 +107,12 @@ export function buildCommandForTool(name, args = {}) {
   if (Number.isInteger(args?.max_height)) screenshotOptions.max_height = args.max_height;
   if (typeof args?.quality === 'number') screenshotOptions.quality = args.quality;
   if (Number.isInteger(args?.max_chars)) screenshotOptions.max_chars = args.max_chars;
+  if (Number.isInteger(args?.tab_id)) screenshotOptions.tab_id = args.tab_id;
+  if (args?.encoding === 'b64' || args?.encoding === 'b64z') screenshotOptions.encoding = args.encoding;
 
+  if (name === 'airkvm_list_tabs') {
+    return { type: 'tabs.list.request', request_id: requestId };
+  }
   if (name === 'airkvm_dom_snapshot') {
     return { type: 'dom.snapshot.request', request_id: requestId };
   }
@@ -127,6 +149,37 @@ export function createResponseCollector(name, command) {
           done: true,
           ok: false,
           data: { request_id: requestId, error: msg.error || 'dom_snapshot_error', detail: msg }
+        };
+      }
+      return null;
+    };
+  }
+
+  if (name === 'airkvm_list_tabs') {
+    const requestId = command.request_id;
+    return (msg) => {
+      if (typeof msg.ok === 'boolean' && msg.ok === false) {
+        return {
+          done: true,
+          ok: false,
+          data: { request_id: requestId, error: msg.error || 'device_rejected', device: msg }
+        };
+      }
+      if (msg.type === 'tabs.list' && msg.request_id === requestId) {
+        return {
+          done: true,
+          ok: true,
+          data: {
+            request_id: requestId,
+            tabs: Array.isArray(msg.tabs) ? msg.tabs : []
+          }
+        };
+      }
+      if (msg.type === 'tabs.list.error' && msg.request_id === requestId) {
+        return {
+          done: true,
+          ok: false,
+          data: { request_id: requestId, error: msg.error || 'tabs_list_error', detail: msg }
         };
       }
       return null;
@@ -205,6 +258,7 @@ export function createResponseCollector(name, command) {
 
       const totalChunks = meta ? (meta.total_chunks ?? meta.tc) : null;
       const totalChars = meta ? (meta.total_chars ?? meta.tch) : null;
+      const encoding = (meta?.encoding ?? meta?.e ?? command.encoding ?? 'b64');
       if (!meta || !Number.isInteger(totalChunks) || totalChunks < 0) {
         return null;
       }
@@ -233,6 +287,23 @@ export function createResponseCollector(name, command) {
       }
 
       const base64 = ordered.join('');
+      let normalizedBase64 = base64;
+      if (encoding === 'b64z') {
+        try {
+          const zipped = Buffer.from(base64, 'base64');
+          normalizedBase64 = gunzipSync(zipped).toString('base64');
+        } catch {
+          return {
+            done: true,
+            ok: false,
+            data: {
+              request_id: requestId,
+              source: (meta.source ?? meta.src) || command.source,
+              error: 'screenshot_decode_failed'
+            }
+          };
+        }
+      }
       return {
         done: true,
         ok: true,
@@ -243,8 +314,9 @@ export function createResponseCollector(name, command) {
           total_chunks: totalChunks,
           total_chars: typeof (meta.total_chars ?? meta.tch) === 'number'
             ? (meta.total_chars ?? meta.tch)
-            : base64.length,
-          base64
+            : normalizedBase64.length,
+          encoding,
+          base64: normalizedBase64
         }
       };
     };

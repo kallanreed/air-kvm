@@ -107,6 +107,15 @@
 - Edge desktop capture compatibility attempt:
   - Moved desktop frame capture flow into bridge page context and exposed `desktop.capture.request` runtime route.
   - Added `getUserMedia` compatibility fallback (`mediaDevices.getUserMedia` and legacy `getUserMedia/webkitGetUserMedia/mozGetUserMedia`).
+- New MCP tab selection workflow:
+  - Added structured tool `airkvm_list_tabs` (`tabs.list.request` -> `tabs.list`).
+  - Extension now returns filtered automatable tabs with fields: `id`, `window_id`, `active`, `title`, `url`.
+  - Screenshot requests now accept optional `tab_id` to target a specific tab.
+- Hybrid screenshot transport mode (phase 1):
+  - Added optional `encoding` for screenshot requests: `b64` (default) or `b64z`.
+  - Extension can emit gzip-compressed base64 payload chunks (`b64z`) while control plane remains JSON.
+  - MCP collector transparently gunzips `b64z` and returns standard image base64 in tool result.
+  - This is a compatibility-first hybrid step; full raw-binary chunk transport is still future work.
 - Bridge health watchdog:
   - Added periodic BLE health ping (`state.request`) in bridge page.
   - If ping ACKs fail consecutively (`kHealthMaxMisses`), bridge now auto-disconnects and updates status.

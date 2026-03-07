@@ -50,7 +50,16 @@ function isAutomationCandidateTab(tab) {
   return true;
 }
 
-async function resolveTargetTab() {
+async function resolveTargetTab(preferredTabId = null) {
+  if (Number.isInteger(preferredTabId)) {
+    try {
+      const tab = await chrome.tabs.get(preferredTabId);
+      if (isAutomationCandidateTab(tab)) return tab;
+    } catch {
+      // fall through
+    }
+  }
+
   if (Number.isInteger(lastAutomationTabId)) {
     try {
       const tab = await chrome.tabs.get(lastAutomationTabId);
@@ -132,7 +141,7 @@ function makeRequestId() {
 }
 
 async function captureTabPng(config) {
-  const tab = await resolveTargetTab();
+  const tab = await resolveTargetTab(config.tabId || null);
   if (!tab?.id) {
     throw new Error('active_tab_not_found');
   }
@@ -230,7 +239,7 @@ async function compressDataUrlToJpeg(dataUrl, config) {
 async function sendDomSnapshot(command) {
   debugLog('sendDomSnapshot start', command);
   const requestId = command.request_id || makeRequestId();
-  const tab = await resolveTargetTab();
+  const tab = await resolveTargetTab(command.tab_id || null);
   if (!tab?.id) throw new Error('active_tab_not_found');
   let summary = null;
   try {
@@ -257,14 +266,65 @@ async function sendScreenshot(command) {
   const source = command.source === 'desktop' ? 'desktop' : 'tab';
   const requestId = command.request_id || makeRequestId();
   const config = resolveScreenshotConfig(command);
+  config.tabId = Number.isInteger(command?.tab_id) ? command.tab_id : null;
   const encoded = source === 'desktop' ? await captureDesktopPng(config) : await captureTabPng(config);
-  const { meta, chunks } = dataUrlToMetaAndChunks(encoded.dataUrl, requestId, source, encoded);
+  const payload = config.encoding === 'b64z' ? await gzipDataUrlBase64(encoded.dataUrl) : null;
+  const { meta, chunks } = dataUrlToMetaAndChunks(
+    encoded.dataUrl,
+    requestId,
+    source,
+    encoded,
+    120,
+    config.encoding,
+    payload
+  );
   debugLog('sendScreenshot encoded', { source, requestId, chunks: chunks.length, totalChars: meta.tch });
   await postEventViaBridge(meta);
   for (const chunk of chunks) {
     // BLE payloads are chunked to reduce risk of exceeding negotiated MTU.
     await postEventViaBridge(chunk);
   }
+}
+
+async function gzipDataUrlBase64(dataUrl) {
+  const comma = dataUrl.indexOf(',');
+  if (comma === -1) throw new Error('screenshot_invalid_data_url');
+  const base64 = dataUrl.slice(comma + 1);
+  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+  if (typeof CompressionStream !== 'function') {
+    return base64;
+  }
+  const cs = new CompressionStream('gzip');
+  const writer = cs.writable.getWriter();
+  await writer.write(bytes);
+  await writer.close();
+  const compressed = await new Response(cs.readable).arrayBuffer();
+  const zipped = new Uint8Array(compressed);
+  let binary = '';
+  for (let i = 0; i < zipped.length; i += 1) {
+    binary += String.fromCharCode(zipped[i]);
+  }
+  return btoa(binary);
+}
+
+async function sendTabsList(command) {
+  const requestId = command.request_id || makeRequestId();
+  const tabs = await chrome.tabs.query({ lastFocusedWindow: true });
+  const filtered = tabs
+    .filter((tab) => isAutomationCandidateTab(tab))
+    .map((tab) => ({
+      id: tab.id,
+      window_id: tab.windowId,
+      active: Boolean(tab.active),
+      title: tab.title || '',
+      url: tab.url || ''
+    }));
+  await postEventViaBridge({
+    type: 'tabs.list',
+    request_id: requestId,
+    tabs: filtered,
+    ts: Date.now()
+  });
 }
 
 async function handleBleCommand(command) {
@@ -293,6 +353,19 @@ async function handleBleCommand(command) {
         type: 'screenshot.error',
         request_id: command.request_id || null,
         source: command.source || 'tab',
+        error: String(err?.message || err),
+        ts: Date.now()
+      });
+    }
+  }
+  if (command.type === 'tabs.list.request') {
+    try {
+      await sendTabsList(command);
+    } catch (err) {
+      debugLog('sendTabsList error', String(err?.message || err));
+      await postEventViaBridge({
+        type: 'tabs.list.error',
+        request_id: command.request_id || null,
         error: String(err?.message || err),
         ts: Date.now()
       });

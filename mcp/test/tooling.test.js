@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { gzipSync } from 'node:zlib';
 
 import {
   buildCommandForTool,
@@ -14,9 +15,12 @@ test('buildCommandForTool maps screenshot tools to screenshot.request', () => {
     max_width: 800,
     max_height: 450,
     quality: 0.5,
-    max_chars: 70000
+    max_chars: 70000,
+    tab_id: 123,
+    encoding: 'b64z'
   });
   const desktop = buildCommandForTool('airkvm_screenshot_desktop', { request_id: 'r2' });
+  const tabs = buildCommandForTool('airkvm_list_tabs', { request_id: 't1' });
 
   assert.deepEqual(tab, {
     type: 'screenshot.request',
@@ -25,17 +29,36 @@ test('buildCommandForTool maps screenshot tools to screenshot.request', () => {
     max_width: 800,
     max_height: 450,
     quality: 0.5,
-    max_chars: 70000
+    max_chars: 70000,
+    tab_id: 123,
+    encoding: 'b64z'
   });
   assert.deepEqual(desktop, { type: 'screenshot.request', source: 'desktop', request_id: 'r2' });
+  assert.deepEqual(tabs, { type: 'tabs.list.request', request_id: 't1' });
 });
 
 test('isKnownTool and isStructuredTool classify tools correctly', () => {
   assert.equal(isKnownTool('airkvm_send'), true);
   assert.equal(isKnownTool('airkvm_dom_snapshot'), true);
+  assert.equal(isKnownTool('airkvm_list_tabs'), true);
   assert.equal(isKnownTool('nope'), false);
   assert.equal(isStructuredTool('airkvm_send'), false);
+  assert.equal(isStructuredTool('airkvm_list_tabs'), true);
   assert.equal(isStructuredTool('airkvm_screenshot_tab'), true);
+});
+
+test('tabs list collector returns structured list payload', () => {
+  const command = { type: 'tabs.list.request', request_id: 'tabs-1' };
+  const collect = createResponseCollector('airkvm_list_tabs', command);
+  const done = collect({
+    type: 'tabs.list',
+    request_id: 'tabs-1',
+    tabs: [{ id: 10, title: 'Example', url: 'https://example.com' }]
+  });
+  assert.equal(done.done, true);
+  assert.equal(done.ok, true);
+  assert.equal(done.data.request_id, 'tabs-1');
+  assert.equal(done.data.tabs.length, 1);
 });
 
 test('dom snapshot collector returns structured success payload', () => {
@@ -120,4 +143,19 @@ test('screenshot collector rejects oversized chunk payload', () => {
   assert.equal(done.done, true);
   assert.equal(done.ok, false);
   assert.equal(done.data.error, 'screenshot_chunk_too_large');
+});
+
+test('screenshot collector decodes b64z payload back to base64 image', () => {
+  const command = { type: 'screenshot.request', source: 'tab', request_id: 'shot-z' };
+  const collect = createResponseCollector('airkvm_screenshot_tab', command);
+  const imageBytes = Buffer.from('hello-image-bytes');
+  const zipped = gzipSync(imageBytes).toString('base64');
+
+  assert.equal(collect({ type: 'screenshot.meta', rid: 'shot-z', src: 'tab', m: 'image/jpeg', tc: 1, tch: zipped.length, e: 'b64z' }), null);
+  const done = collect({ type: 'screenshot.chunk', rid: 'shot-z', src: 'tab', q: 0, d: zipped });
+
+  assert.equal(done.done, true);
+  assert.equal(done.ok, true);
+  assert.equal(done.data.encoding, 'b64z');
+  assert.equal(done.data.base64, imageBytes.toString('base64'));
 });

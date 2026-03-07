@@ -69,8 +69,11 @@ void CommandRouter::HandleCommand(const airkvm::Command& cmd) {
           "\",\"built_at\":\"" AIRKVM_FW_BUILT_AT "\"}");
       break;
     case airkvm::CommandType::kDomSnapshotRequest:
+    case airkvm::CommandType::kTabsListRequest:
     case airkvm::CommandType::kScreenshotRequest:
     case airkvm::CommandType::kDomSnapshot:
+    case airkvm::CommandType::kTabsList:
+    case airkvm::CommandType::kTabsListError:
     case airkvm::CommandType::kDomSnapshotError:
     case airkvm::CommandType::kScreenshotMeta:
     case airkvm::CommandType::kScreenshotChunk:

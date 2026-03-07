@@ -24,6 +24,7 @@ export function resolveScreenshotConfig(command, base = kDefaultScreenshotConfig
     maxHeight: clampInt(command?.max_height, 120, 1080, base.maxHeight),
     jpegQuality: clampNumber(command?.quality, 0.3, 0.9, base.jpegQuality),
     maxBase64Chars: clampInt(command?.max_chars, 20000, 200000, base.maxBase64Chars),
+    encoding: command?.encoding === 'b64z' ? 'b64z' : 'b64',
     maxAttempts: base.maxAttempts,
     downscaleFactor: base.downscaleFactor,
     minJpegQuality: base.minJpegQuality
@@ -35,13 +36,15 @@ export function dataUrlToMetaAndChunks(
   requestId,
   source,
   encodeStats = null,
-  chunkSize = 120
+  chunkSize = 120,
+  encoding = 'b64',
+  payloadBase64Override = null
 ) {
   const comma = dataUrl.indexOf(',');
   if (comma === -1) throw new Error('screenshot_invalid_data_url');
 
   const header = dataUrl.slice(0, comma);
-  const base64 = dataUrl.slice(comma + 1);
+  const base64 = payloadBase64Override || dataUrl.slice(comma + 1);
   const mimeMatch = /^data:([^;]+);base64$/i.exec(header);
   const mime = mimeMatch?.[1] || 'application/octet-stream';
   const totalChunks = Math.ceil(base64.length / chunkSize);
@@ -51,6 +54,7 @@ export function dataUrlToMetaAndChunks(
     rid: requestId,
     src: source,
     m: mime,
+    e: encoding,
     cs: chunkSize,
     tc: totalChunks,
     tch: base64.length,
@@ -73,4 +77,3 @@ export function dataUrlToMetaAndChunks(
 
   return { meta, chunks };
 }
-

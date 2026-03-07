@@ -32,6 +32,9 @@ export function validateAgentCommand(msg) {
       if (!((msg.source === 'tab' || msg.source === 'desktop') && typeof msg.request_id === 'string')) {
         return { ok: false, error: 'invalid_screenshot_request' };
       }
+      if (typeof msg.tab_id !== 'undefined' && !Number.isInteger(msg.tab_id)) {
+        return { ok: false, error: 'invalid_screenshot_request' };
+      }
       if (typeof msg.max_width !== 'undefined' && !Number.isInteger(msg.max_width)) {
         return { ok: false, error: 'invalid_screenshot_request' };
       }
@@ -44,6 +47,11 @@ export function validateAgentCommand(msg) {
       if (typeof msg.quality !== 'undefined' && typeof msg.quality !== 'number') {
         return { ok: false, error: 'invalid_screenshot_request' };
       }
+      if (typeof msg.encoding !== 'undefined' && msg.encoding !== 'b64' && msg.encoding !== 'b64z') {
+        return { ok: false, error: 'invalid_screenshot_request' };
+      }
+      return { ok: true };
+    case 'tabs.list.request':
       return { ok: true };
     default:
       return { ok: false, error: 'unknown_type' };

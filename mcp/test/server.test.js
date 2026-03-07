@@ -22,10 +22,36 @@ test('tools/list includes structured tools', () => {
   const names = sent[0].result.tools.map((tool) => tool.name);
   assert.deepEqual(names, [
     'airkvm_send',
+    'airkvm_list_tabs',
     'airkvm_dom_snapshot',
     'airkvm_screenshot_tab',
     'airkvm_screenshot_desktop'
   ]);
+});
+
+test('airkvm_list_tabs returns structured json content', async () => {
+  const { sent, server } = makeHarness(async () => ({
+    ok: true,
+    data: {
+      request_id: 'tabs-1',
+      tabs: [{ id: 1, title: 'Example', url: 'https://example.com' }]
+    }
+  }));
+
+  server.handleRequest({
+    jsonrpc: '2.0',
+    id: 99,
+    method: 'tools/call',
+    params: {
+      name: 'airkvm_list_tabs',
+      arguments: { request_id: 'tabs-1' }
+    }
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const payload = JSON.parse(sent[0].result.content[0].text);
+  assert.equal(payload.request_id, 'tabs-1');
+  assert.equal(payload.tabs.length, 1);
 });
 
 test('airkvm_dom_snapshot returns structured json content', async () => {
@@ -97,4 +123,30 @@ test('airkvm_dom_snapshot returns structured transport error payload', async () 
   assert.equal(payload.request_id, 'dom-timeout');
   assert.equal(payload.error, 'transport_error');
   assert.equal(payload.detail, 'device_timeout');
+});
+
+test('airkvm_dom_snapshot transport error includes diagnostics frames', async () => {
+  const err = new Error('device_timeout');
+  err.frames = [{ kind: 'log', msg: 'rx.uart {"type":"dom.snapshot.request"}' }];
+  err.recentFrames = [{ kind: 'ctrl', msg: { ok: true } }];
+  const { sent, server } = makeHarness(async () => {
+    throw err;
+  });
+
+  server.handleRequest({
+    jsonrpc: '2.0',
+    id: 5,
+    method: 'tools/call',
+    params: {
+      name: 'airkvm_dom_snapshot',
+      arguments: { request_id: 'dom-diag' }
+    }
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(sent[0].isError, true);
+  const payload = JSON.parse(sent[0].result.content[0].text);
+  assert.equal(payload.error, 'transport_error');
+  assert.equal(payload.diagnostics.frames.length, 1);
+  assert.equal(payload.diagnostics.recent_frames.length, 1);
 });

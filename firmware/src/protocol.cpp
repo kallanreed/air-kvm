@@ -97,6 +97,13 @@ std::optional<Command> ParseCommandLine(const std::string& line) {
     return cmd;
   }
 
+  if (Contains(line, "\"type\":\"tabs.list.request\"")) {
+    cmd.type = CommandType::kTabsListRequest;
+    cmd.request_id = ExtractString(line, "request_id");
+    cmd.raw = line;
+    return cmd;
+  }
+
   if (Contains(line, "\"type\":\"screenshot.request\"")) {
     cmd.type = CommandType::kScreenshotRequest;
     cmd.source = ExtractString(line, "source");
@@ -107,6 +114,20 @@ std::optional<Command> ParseCommandLine(const std::string& line) {
 
   if (Contains(line, "\"type\":\"dom.snapshot\"")) {
     cmd.type = CommandType::kDomSnapshot;
+    cmd.request_id = ExtractString(line, "request_id");
+    cmd.raw = line;
+    return cmd;
+  }
+
+  if (Contains(line, "\"type\":\"tabs.list\"")) {
+    cmd.type = CommandType::kTabsList;
+    cmd.request_id = ExtractString(line, "request_id");
+    cmd.raw = line;
+    return cmd;
+  }
+
+  if (Contains(line, "\"type\":\"tabs.list.error\"")) {
+    cmd.type = CommandType::kTabsListError;
     cmd.request_id = ExtractString(line, "request_id");
     cmd.raw = line;
     return cmd;
