@@ -23,7 +23,7 @@ AirKvmApp& AirKvmApp::Instance() {
   return app;
 }
 
-AirKvmApp::AirKvmApp() : router_(transport_, state_), rx_callbacks_(*this) {}
+AirKvmApp::AirKvmApp() : router_(transport_, state_, hid_), rx_callbacks_(*this) {}
 
 void AirKvmApp::Setup() {
   Serial.begin(115200);
@@ -31,6 +31,9 @@ void AirKvmApp::Setup() {
 
   NimBLEDevice::init(kDeviceName);
   NimBLEServer* server = NimBLEDevice::createServer();
+  NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
+  hid_.Setup(server, advertising);
+
   NimBLEService* service = server->createService(kServiceUuid);
 
   NimBLECharacteristic* rx_char = service->createCharacteristic(
@@ -42,7 +45,6 @@ void AirKvmApp::Setup() {
   transport_.SetBleTxCharacteristic(tx_char);
 
   service->start();
-  NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
   advertising->addServiceUUID(kServiceUuid);
   advertising->setScanResponse(true);
   advertising->start();

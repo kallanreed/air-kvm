@@ -5,6 +5,7 @@
 
 #include "command_router.hpp"
 #include "device_state.hpp"
+#include "hid_controller.hpp"
 #include "transport_mux.hpp"
 #include "uart_line_reader.hpp"
 
@@ -33,6 +34,7 @@ class AirKvmApp {
   void OnBleWrite(const std::string& value);
 
   DeviceState state_;
+  HidController hid_;
   TransportMux transport_;
   CommandRouter router_;
   UartLineReader uart_reader_;

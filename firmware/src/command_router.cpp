@@ -7,8 +7,8 @@
 
 namespace airkvm::fw {
 
-CommandRouter::CommandRouter(TransportMux& transport, DeviceState& state)
-    : transport_(transport), state_(state) {}
+CommandRouter::CommandRouter(TransportMux& transport, DeviceState& state, HidController& hid)
+    : transport_(transport), state_(state), hid_(hid) {}
 
 void CommandRouter::ProcessLine(const String& line, const char* source) {
   if (line.length() == 0) {
