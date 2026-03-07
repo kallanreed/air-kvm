@@ -98,6 +98,20 @@ export function getConnectedDeviceInfo() {
   };
 }
 
+export function disconnectBle() {
+  const device = bleDevice;
+  if (device?.gatt?.connected) {
+    try {
+      device.gatt.disconnect();
+    } catch {
+      // Ignore disconnect errors.
+    }
+  }
+  rxCharacteristic = null;
+  txCharacteristic = null;
+  bleLineBuffer = '';
+}
+
 async function ensureConnected(deps = {}) {
   if (rxCharacteristic && bleDevice?.gatt?.connected) return true;
   return connectBle(deps);

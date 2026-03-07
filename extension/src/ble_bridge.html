@@ -18,14 +18,38 @@
         margin-top: 10px;
         font-size: 13px;
       }
+      #log {
+        margin-top: 12px;
+        border: 1px solid #d0d0d0;
+        border-radius: 6px;
+        padding: 8px;
+        background: #fafafa;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+        line-height: 1.35;
+        height: 220px;
+        overflow: auto;
+        white-space: pre-wrap;
+      }
+      #log-controls {
+        margin-top: 10px;
+      }
     </style>
   </head>
   <body>
     <h3>AirKVM BLE Bridge</h3>
     <p>Keep this tab open in Edge while using AirKVM.</p>
-    <button id="connect">Connect BLE</button>
+    <div>
+      <button id="connect">Connect BLE</button>
+      <button id="disconnect">Disconnect</button>
+      <button id="forget">Forget Saved Device</button>
+      <button id="reconnect">Reconnect (Chooser)</button>
+    </div>
     <div id="status">Disconnected</div>
+    <div id="log-controls">
+      <button id="clear-log">Clear Log</button>
+    </div>
+    <div id="log"></div>
     <script type="module" src="./ble_bridge.js"></script>
   </body>
   </html>
-

@@ -44,6 +44,14 @@
 - BLE device selection hardening:
   - Bridge persists preferred BLE device ID in `chrome.storage.local` and attempts reconnect via `navigator.bluetooth.getDevices()` first.
   - Chooser request now filters by both UART service UUID and `namePrefix: "air-kvm"` when manual selection is needed.
+- Bridge UX controls for hard reset:
+  - Added buttons in `ble_bridge.html`: `Disconnect`, `Forget Saved Device`, and `Reconnect (Chooser)`.
+  - `Reconnect (Chooser)` now disconnects active GATT session, clears preferred device ID, and forces fresh selection flow.
+  - Invalid handshake path now explicitly disconnects and clears preferred device before marking invalid stream.
+- Bridge page now has a built-in log console:
+  - Added `#log` panel + `Clear Log` button to `ble_bridge.html`.
+  - `ble_bridge.js` mirrors bridge debug events into the page log with timestamps and keeps a capped line history.
+  - This allows runtime debugging without opening DevTools.
 
 ## In-Progress / Not Complete
 - BLE HID (HOGP) is not implemented (main blocker).
