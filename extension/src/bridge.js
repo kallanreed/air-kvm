@@ -152,6 +152,13 @@ export async function connectBle(deps = {}) {
     rxCharacteristic = null;
     txCharacteristic = null;
     bleLineBuffer = '';
+    if (typeof deps.onDisconnect === 'function') {
+      try {
+        deps.onDisconnect();
+      } catch {
+        // Non-fatal disconnect callback.
+      }
+    }
   });
 
   return true;

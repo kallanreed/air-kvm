@@ -19,6 +19,7 @@ Milestone (March 7, 2026):
 - Next live validation target: screenshot tools (`airkvm_screenshot_tab`, `airkvm_screenshot_desktop`).
 - Pre-check before MCP DOM/screenshot calls: bridge tab must be connected (status shows `Connected`).
 - If not connected, firmware still ACKs request but MCP times out waiting for `dom.snapshot` / `screenshot.*` frames.
+- Bridge now runs a health ping watchdog (`state.request`) and auto-disconnects/status-updates on repeated missed ACKs.
 
 
   You will operate in two roles:

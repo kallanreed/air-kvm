@@ -88,3 +88,47 @@ test('disconnectBle clears connected device metadata', async () => {
   disconnectBle();
   assert.deepEqual(getConnectedDeviceInfo(), { id: null, name: null, connected: false });
 });
+
+test('connectBle invokes onDisconnect callback on gatt disconnection', async () => {
+  __resetBleForTest();
+  let disconnectHandler = null;
+  let disconnectCalls = 0;
+  const rx = {
+    writeValueWithoutResponse: async () => {}
+  };
+  const tx = {
+    addEventListener: () => {},
+    startNotifications: async () => {}
+  };
+  const service = {
+    getCharacteristic: async (uuid) => (String(uuid).endsWith('03-b5a3-f393-e0a9-e50e24dccb01') ? tx : rx)
+  };
+  const server = {
+    connected: true,
+    getPrimaryService: async () => service
+  };
+  const device = {
+    gatt: { connected: true, connect: async () => server },
+    addEventListener: (event, handler) => {
+      if (event === 'gattserverdisconnected') {
+        disconnectHandler = handler;
+      }
+    }
+  };
+  const navigatorLike = {
+    bluetooth: {
+      requestDevice: async () => device
+    }
+  };
+
+  const connected = await connectBle({
+    navigatorLike,
+    onDisconnect: () => {
+      disconnectCalls += 1;
+    }
+  });
+  assert.equal(connected, true);
+  assert.equal(typeof disconnectHandler, 'function');
+  disconnectHandler();
+  assert.equal(disconnectCalls, 1);
+});

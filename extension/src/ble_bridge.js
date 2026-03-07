@@ -19,8 +19,17 @@ const kHandshakeTimeoutMs = 6000;
 const kHandshakeAttempts = 3;
 const kPreferredDeviceStorageKey = 'blePreferredDeviceId';
 const kMaxLogLines = 250;
+const kHealthPingIntervalMs = 5000;
+const kHealthPingTimeoutMs = 3000;
+const kHealthMaxMisses = 2;
 let logLines = [];
 let connectInFlight = false;
+let disconnectInFlight = false;
+let healthTimer = null;
+let healthState = {
+  misses: 0,
+  pendingPingResolve: null
+};
 
 function appendLog(line) {
   if (!logEl) return;
@@ -65,6 +74,83 @@ function setStatus(text) {
 function setControlsDisabled(disabled) {
   if (connectBtn) connectBtn.disabled = disabled;
   if (reconnectBtn) reconnectBtn.disabled = disabled;
+}
+
+function stopHealthWatchdog() {
+  if (healthTimer) {
+    clearInterval(healthTimer);
+    healthTimer = null;
+  }
+  if (healthState.pendingPingResolve) {
+    healthState.pendingPingResolve(false);
+    healthState.pendingPingResolve = null;
+  }
+  healthState.misses = 0;
+}
+
+async function markDisconnected(reason) {
+  if (disconnectInFlight) return;
+  disconnectInFlight = true;
+  stopHealthWatchdog();
+  disconnectBle();
+  notifySw('disconnect', reason || null);
+  setStatus(reason ? `Disconnected (${reason})` : 'Disconnected');
+  disconnectInFlight = false;
+}
+
+function waitForHealthAck() {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      if (healthState.pendingPingResolve) {
+        healthState.pendingPingResolve = null;
+      }
+      resolve(false);
+    }, kHealthPingTimeoutMs);
+    healthState.pendingPingResolve = (ok) => {
+      clearTimeout(timer);
+      healthState.pendingPingResolve = null;
+      resolve(Boolean(ok));
+    };
+  });
+}
+
+function noteControlFrameForHealth(unwrapped) {
+  if (!unwrapped) return;
+  if (!healthState.pendingPingResolve) return;
+  if (unwrapped.type === 'state' || typeof unwrapped.ok === 'boolean') {
+    healthState.pendingPingResolve(true);
+  }
+}
+
+function startHealthWatchdog() {
+  stopHealthWatchdog();
+  healthTimer = setInterval(async () => {
+    const info = getConnectedDeviceInfo();
+    if (!info.connected) {
+      debugLog('health disconnected at gatt layer');
+      await markDisconnected('health:gatt_disconnected');
+      return;
+    }
+    const ackWait = waitForHealthAck();
+    const posted = await postEvent({ type: 'state.request' }, { traceId: `bridge-health-${Date.now()}` });
+    if (!posted) {
+      healthState.misses += 1;
+      debugLog('health ping send failed', { misses: healthState.misses });
+    } else {
+      const ok = await ackWait;
+      if (ok) {
+        healthState.misses = 0;
+      } else {
+        healthState.misses += 1;
+        debugLog('health ping timeout', { misses: healthState.misses });
+      }
+    }
+
+    if (healthState.misses >= kHealthMaxMisses) {
+      debugLog('health watchdog disconnecting', { misses: healthState.misses });
+      await markDisconnected('health:timeout');
+    }
+  }, kHealthPingIntervalMs);
 }
 
 function notifySw(status, detail = null) {
@@ -138,6 +224,10 @@ async function connectAndBind() {
   try {
     const ok = await connectBle({
       preferredDeviceId,
+      onDisconnect: () => {
+        debugLog('gattserverdisconnected');
+        void markDisconnected('gatt_disconnected');
+      },
       requestOptions: {
         filters: [
           { services: ['6e400101-b5a3-f393-e0a9-e50e24dccb01'], name: 'air-kvm-ctrl-cb01' },
@@ -150,6 +240,7 @@ async function connectAndBind() {
         const unwrapped = unwrapCommand(command);
         debugLog('rx command from BLE', { raw: command, unwrapped });
         if (!unwrapped) return;
+        noteControlFrameForHealth(unwrapped);
         if (state.pendingHandshake && (unwrapped.type === 'state' || typeof unwrapped.ok === 'boolean')) {
           state.pendingHandshake();
         }
@@ -200,6 +291,7 @@ async function connectAndBind() {
     await savePreferredDeviceId(info.id);
     notifySw('connect_success');
     setStatus('Connected');
+    startHealthWatchdog();
   } catch (err) {
     debugLog('connect error', String(err?.message || err));
     notifySw('connect_error', String(err?.message || err));
@@ -211,9 +303,7 @@ async function connectAndBind() {
 }
 
 async function disconnectAndReport(detail = null) {
-  disconnectBle();
-  notifySw('disconnect', detail);
-  setStatus('Disconnected');
+  await markDisconnected(detail);
 }
 
 connectBtn?.addEventListener('click', () => {

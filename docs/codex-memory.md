@@ -98,6 +98,11 @@
   - Live `airkvm_screenshot_tab` returned explicit error:
     - `Either the '<all_urls>' or 'activeTab' permission is required.`
   - Added `host_permissions: ["<all_urls>"]` to extension manifest to allow non-click-driven screenshot requests.
+- Bridge health watchdog:
+  - Added periodic BLE health ping (`state.request`) in bridge page.
+  - If ping ACKs fail consecutively (`kHealthMaxMisses`), bridge now auto-disconnects and updates status.
+  - Added immediate `gattserverdisconnected` callback hook from `bridge.js` into bridge page status path.
+  - Purpose: avoid stale UI `Connected` state when BLE transport silently dies.
 
 ## In-Progress / Not Complete
 - BLE HID (HOGP) is not implemented (main blocker).
