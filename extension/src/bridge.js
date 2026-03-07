@@ -2,10 +2,18 @@ const UART_SERVICE_UUID = '6e400101-b5a3-f393-e0a9-e50e24dccb01';
 const UART_RX_CHAR_UUID = '6e400102-b5a3-f393-e0a9-e50e24dccb01';
 const UART_TX_CHAR_UUID = '6e400103-b5a3-f393-e0a9-e50e24dccb01';
 const kDebug = true;
+let debugLogger = null;
 
 function debugLog(...args) {
   if (!kDebug) return;
   console.log('[airkvm-ble]', ...args);
+  if (typeof debugLogger === 'function') {
+    try {
+      debugLogger(...args);
+    } catch {
+      // Non-fatal logging hook.
+    }
+  }
 }
 
 let bleDevice = null;
@@ -20,6 +28,11 @@ export function __resetBleForTest() {
   txCharacteristic = null;
   bleLineBuffer = '';
   commandHandler = null;
+  debugLogger = null;
+}
+
+export function setBleDebugLogger(logger) {
+  debugLogger = typeof logger === 'function' ? logger : null;
 }
 
 function hasBluetooth(navigatorLike) {

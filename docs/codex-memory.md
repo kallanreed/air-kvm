@@ -52,6 +52,7 @@
   - Added `#log` panel + `Clear Log` button to `ble_bridge.html`.
   - `ble_bridge.js` mirrors bridge debug events into the page log with timestamps and keeps a capped line history.
   - This allows runtime debugging without opening DevTools.
+  - `bridge.js` low-level BLE logs now also flow into the page log (`[ble]` prefix), including RX byte previews and TX write mode.
 - BLE cache-bust change:
   - Rolled UART BLE UUID set in firmware + extension to force fresh GATT discovery and avoid stale-handle reconnects.
   - New UUIDs:

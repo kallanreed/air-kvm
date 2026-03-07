@@ -1,4 +1,4 @@
-import { connectBle, disconnectBle, getConnectedDeviceInfo, postEvent } from './bridge.js';
+import { connectBle, disconnectBle, getConnectedDeviceInfo, postEvent, setBleDebugLogger } from './bridge.js';
 
 const statusEl = document.getElementById('status');
 const connectBtn = document.getElementById('connect');
@@ -37,6 +37,18 @@ function debugLog(...args) {
   }).join(' ');
   appendLog(`${new Date().toISOString()} ${rendered}`);
 }
+
+setBleDebugLogger((...args) => {
+  const rendered = args.map((part) => {
+    if (typeof part === 'string') return part;
+    try {
+      return JSON.stringify(part);
+    } catch {
+      return String(part);
+    }
+  }).join(' ');
+  appendLog(`${new Date().toISOString()} [ble] ${rendered}`);
+});
 
 function setStatus(text) {
   if (statusEl) statusEl.textContent = text;
