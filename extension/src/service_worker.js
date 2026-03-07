@@ -1,5 +1,9 @@
 import { connectBle, postEvent, setBleCommandHandler } from './bridge.js';
 
+const kScreenshotMaxWidth = 1280;
+const kScreenshotMaxHeight = 720;
+const kScreenshotJpegQuality = 0.65;
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || typeof msg.type !== 'string') return;
 
@@ -14,7 +18,8 @@ function makeRequestId() {
 }
 
 async function captureTabPng() {
-  return chrome.tabs.captureVisibleTab(undefined, { format: 'png' });
+  const dataUrl = await chrome.tabs.captureVisibleTab(undefined, { format: 'png' });
+  return compressDataUrlToJpeg(dataUrl);
 }
 
 async function captureDesktopPng() {
@@ -47,20 +52,48 @@ async function captureDesktopPng() {
     if (!track) throw new Error('desktop_capture_no_track');
     const imageCapture = new ImageCapture(track);
     const bitmap = await imageCapture.grabFrame();
-    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(bitmap, 0, 0);
-    const blob = await canvas.convertToBlob({ type: 'image/png' });
-    const ab = await blob.arrayBuffer();
-    const bytes = new Uint8Array(ab);
-    let binary = '';
-    for (let i = 0; i < bytes.length; i += 1) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    return `data:image/png;base64,${btoa(binary)}`;
+    return encodeBitmapToJpegDataUrl(bitmap);
   } finally {
     stream.getTracks().forEach((t) => t.stop());
   }
+}
+
+function fitWithin(width, height, maxWidth, maxHeight) {
+  if (width <= 0 || height <= 0) {
+    return { width: 1, height: 1 };
+  }
+  const scale = Math.min(1, maxWidth / width, maxHeight / height);
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale))
+  };
+}
+
+async function blobToDataUrl(blob) {
+  const ab = await blob.arrayBuffer();
+  const bytes = new Uint8Array(ab);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 1) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return `data:${blob.type || 'application/octet-stream'};base64,${btoa(binary)}`;
+}
+
+async function encodeBitmapToJpegDataUrl(bitmap) {
+  const size = fitWithin(bitmap.width, bitmap.height, kScreenshotMaxWidth, kScreenshotMaxHeight);
+  const canvas = new OffscreenCanvas(size.width, size.height);
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('canvas_2d_unavailable');
+  ctx.drawImage(bitmap, 0, 0, size.width, size.height);
+  const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: kScreenshotJpegQuality });
+  return blobToDataUrl(blob);
+}
+
+async function compressDataUrlToJpeg(dataUrl) {
+  const response = await fetch(dataUrl);
+  const blob = await response.blob();
+  const bitmap = await createImageBitmap(blob);
+  return encodeBitmapToJpegDataUrl(bitmap);
 }
 
 function dataUrlToMetaAndChunks(dataUrl, requestId, source) {
