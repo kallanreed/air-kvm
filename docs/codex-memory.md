@@ -98,6 +98,9 @@
   - Live `airkvm_screenshot_tab` returned explicit error:
     - `Either the '<all_urls>' or 'activeTab' permission is required.`
   - Added `host_permissions: ["<all_urls>"]` to extension manifest to allow non-click-driven screenshot requests.
+- DevTools capture trap fix:
+  - `chrome.tabs.captureVisibleTab` captures the active tab, which failed when DevTools/extension tab was focused.
+  - Updated tab screenshot flow to resolve a valid automation tab and activate it before capture.
 - Bridge health watchdog:
   - Added periodic BLE health ping (`state.request`) in bridge page.
   - If ping ACKs fail consecutively (`kHealthMaxMisses`), bridge now auto-disconnects and updates status.

@@ -39,8 +39,14 @@ function isAutomationCandidateTab(tab) {
   if (!tab?.id) return false;
   const url = String(tab.url || '');
   if (!url) return true;
-  if (url.startsWith('edge://') || url.startsWith('chrome://')) return false;
-  if (url.startsWith('chrome-extension://') || url.startsWith('edge-extension://')) return false;
+  if (url.startsWith('edge://') || url.startsWith('chrome://') || url.startsWith('devtools://')) return false;
+  if (
+    url.startsWith('chrome-extension://') ||
+    url.startsWith('edge-extension://') ||
+    url.startsWith('extension://')
+  ) {
+    return false;
+  }
   return true;
 }
 
@@ -126,7 +132,14 @@ function makeRequestId() {
 }
 
 async function captureTabPng(config) {
-  const dataUrl = await chrome.tabs.captureVisibleTab(undefined, { format: 'png' });
+  const tab = await resolveTargetTab();
+  if (!tab?.id) {
+    throw new Error('active_tab_not_found');
+  }
+  if (!tab.active && chrome.tabs?.update) {
+    await chrome.tabs.update(tab.id, { active: true });
+  }
+  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
   return compressDataUrlToJpeg(dataUrl, config);
 }
 
