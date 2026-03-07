@@ -70,6 +70,28 @@ function onToolsList(id) {
             },
             required: []
           }
+        },
+        {
+          name: 'airkvm_screenshot_tab',
+          description: 'Request a tab screenshot from the target extension over the AirKVM transport.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              request_id: { type: 'string' }
+            },
+            required: []
+          }
+        },
+        {
+          name: 'airkvm_screenshot_desktop',
+          description: 'Request a desktop screenshot from the target extension over the AirKVM transport.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              request_id: { type: 'string' }
+            },
+            required: []
+          }
         }
       ]
     }
@@ -87,8 +109,29 @@ function onToolCall(id, params) {
       request_id: typeof requestId === 'string' && requestId.length > 0 ? requestId : makeRequestId()
     };
   }
+  if (name === 'airkvm_screenshot_tab') {
+    const requestId = params?.arguments?.request_id;
+    command = {
+      type: 'screenshot.request',
+      source: 'tab',
+      request_id: typeof requestId === 'string' && requestId.length > 0 ? requestId : makeRequestId()
+    };
+  }
+  if (name === 'airkvm_screenshot_desktop') {
+    const requestId = params?.arguments?.request_id;
+    command = {
+      type: 'screenshot.request',
+      source: 'desktop',
+      request_id: typeof requestId === 'string' && requestId.length > 0 ? requestId : makeRequestId()
+    };
+  }
 
-  if (name !== 'airkvm_send' && name !== 'airkvm_dom_snapshot') {
+  if (
+    name !== 'airkvm_send' &&
+    name !== 'airkvm_dom_snapshot' &&
+    name !== 'airkvm_screenshot_tab' &&
+    name !== 'airkvm_screenshot_desktop'
+  ) {
     send({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Unknown tool' } });
     return;
   }
