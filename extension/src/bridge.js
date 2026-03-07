@@ -26,6 +26,28 @@ function hasBluetooth(navigatorLike) {
   return Boolean(navigatorLike?.bluetooth?.requestDevice);
 }
 
+async function pickDevice(navigatorLike, deps = {}) {
+  const preferredDeviceId = deps.preferredDeviceId || null;
+  if (preferredDeviceId && typeof navigatorLike?.bluetooth?.getDevices === 'function') {
+    try {
+      const known = await navigatorLike.bluetooth.getDevices();
+      const preferred = known.find((d) => d?.id === preferredDeviceId);
+      if (preferred) {
+        debugLog('using preferred device', preferred.id);
+        return preferred;
+      }
+    } catch (err) {
+      debugLog('getDevices failed', String(err?.message || err));
+    }
+  }
+
+  const requestOptions = deps.requestOptions || {
+    filters: [{ services: [UART_SERVICE_UUID] }],
+    optionalServices: [UART_SERVICE_UUID]
+  };
+  return navigatorLike.bluetooth.requestDevice(requestOptions);
+}
+
 export async function connectBle(deps = {}) {
   const navigatorLike = deps.navigatorLike || globalThis.navigator;
   if (!hasBluetooth(navigatorLike)) {
@@ -33,10 +55,7 @@ export async function connectBle(deps = {}) {
     return false;
   }
 
-  const device = await navigatorLike.bluetooth.requestDevice({
-    filters: [{ services: [UART_SERVICE_UUID] }],
-    optionalServices: [UART_SERVICE_UUID]
-  });
+  const device = await pickDevice(navigatorLike, deps);
 
   const server = await device.gatt.connect();
   const service = await server.getPrimaryService(UART_SERVICE_UUID);
@@ -69,6 +88,14 @@ export async function connectBle(deps = {}) {
   });
 
   return true;
+}
+
+export function getConnectedDeviceInfo() {
+  return {
+    id: bleDevice?.id || null,
+    name: bleDevice?.name || null,
+    connected: Boolean(bleDevice?.gatt?.connected)
+  };
 }
 
 async function ensureConnected(deps = {}) {

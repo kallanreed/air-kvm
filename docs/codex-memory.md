@@ -41,6 +41,9 @@
 - BLE stream validation:
   - Bridge now sends `state.request` immediately after connect and requires a valid JSON control reply (`state` or `ok`) within timeout.
   - If handshake fails and only binary noise is observed, bridge marks connection as invalid stream instead of reporting connected.
+- BLE device selection hardening:
+  - Bridge persists preferred BLE device ID in `chrome.storage.local` and attempts reconnect via `navigator.bluetooth.getDevices()` first.
+  - Chooser request now filters by both UART service UUID and `namePrefix: "air-kvm"` when manual selection is needed.
 
 ## In-Progress / Not Complete
 - BLE HID (HOGP) is not implemented (main blocker).

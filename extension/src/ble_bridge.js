@@ -1,9 +1,10 @@
-import { connectBle, postEvent } from './bridge.js';
+import { connectBle, getConnectedDeviceInfo, postEvent } from './bridge.js';
 
 const statusEl = document.getElementById('status');
 const connectBtn = document.getElementById('connect');
 const kDebug = true;
 const kHandshakeTimeoutMs = 2000;
+const kPreferredDeviceStorageKey = 'blePreferredDeviceId';
 
 function debugLog(...args) {
   if (!kDebug) return;
@@ -16,6 +17,26 @@ function setStatus(text) {
 
 function notifySw(status, detail = null) {
   chrome.runtime.sendMessage({ type: 'ble.bridge.status', status, detail }).catch(() => {});
+}
+
+async function loadPreferredDeviceId() {
+  try {
+    const stored = await chrome.storage.local.get(kPreferredDeviceStorageKey);
+    return typeof stored?.[kPreferredDeviceStorageKey] === 'string'
+      ? stored[kPreferredDeviceStorageKey]
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function savePreferredDeviceId(deviceId) {
+  if (!deviceId) return;
+  try {
+    await chrome.storage.local.set({ [kPreferredDeviceStorageKey]: deviceId });
+  } catch {
+    // Non-fatal.
+  }
 }
 
 function unwrapCommand(frame) {
@@ -44,8 +65,15 @@ async function connectAndBind() {
   notifySw('connect_click');
   setStatus('Connecting...');
   const state = { pendingHandshake: null };
+  const preferredDeviceId = await loadPreferredDeviceId();
+  debugLog('preferred device', preferredDeviceId);
   try {
     const ok = await connectBle({
+      preferredDeviceId,
+      requestOptions: {
+        filters: [{ services: ['6e400001-b5a3-f393-e0a9-e50e24dcca9e'], namePrefix: 'air-kvm' }],
+        optionalServices: ['6e400001-b5a3-f393-e0a9-e50e24dcca9e']
+      },
       onCommand: async (command) => {
         const unwrapped = unwrapCommand(command);
         debugLog('rx command from BLE', { raw: command, unwrapped });
@@ -79,6 +107,9 @@ async function connectAndBind() {
       setStatus('Invalid stream (not AirKVM control)');
       return;
     }
+    const info = getConnectedDeviceInfo();
+    debugLog('connected device info', info);
+    await savePreferredDeviceId(info.id);
     notifySw('connect_success');
     setStatus('Connected');
   } catch (err) {
