@@ -6,7 +6,7 @@
 - MCP runs on controller/host machine and talks to device via UART.
 
 ## Current Reality
-- Firmware BLE profile is currently custom UART-like (`6E400001-B5A3-F393-E0A9-E50E24DCCA9E`), not HOGP.
+- Firmware BLE profile is currently custom UART-like (`6E400101-B5A3-F393-E0A9-E50E24DCCB01`), not HOGP.
 - Therefore device does not enumerate as HID on macOS yet.
 - MCP busy-state check works over UART (`state.request` -> `state` response confirmed live).
 
@@ -52,6 +52,12 @@
   - Added `#log` panel + `Clear Log` button to `ble_bridge.html`.
   - `ble_bridge.js` mirrors bridge debug events into the page log with timestamps and keeps a capped line history.
   - This allows runtime debugging without opening DevTools.
+- BLE cache-bust change:
+  - Rolled UART BLE UUID set in firmware + extension to force fresh GATT discovery and avoid stale-handle reconnects.
+  - New UUIDs:
+    - service: `6E400101-B5A3-F393-E0A9-E50E24DCCB01`
+    - RX: `6E400102-B5A3-F393-E0A9-E50E24DCCB01`
+    - TX: `6E400103-B5A3-F393-E0A9-E50E24DCCB01`
 
 ## In-Progress / Not Complete
 - BLE HID (HOGP) is not implemented (main blocker).

@@ -14,7 +14,7 @@ Ship a working remote-control stack where:
 - `state.request` and `state.set` are implemented.
 - `fw.version.request` is implemented.
 - Build metadata (`version`, `built_at`) is now emitted in firmware control payloads.
-- BLE custom UART-style GATT service (`6E400001-...`) is implemented.
+- BLE custom UART-style GATT service (`6E400101-...`) is implemented.
 
 ### MCP
 - STDIO MCP server is implemented with tool `airkvm_send`.
@@ -25,7 +25,7 @@ Ship a working remote-control stack where:
 ### Extension
 - Content script emits DOM summary and busy/idle events.
 - Service worker can connect with Web Bluetooth and send JSONL events over BLE write characteristic.
-- BLE permissions/scaffolding added in MV3 manifest.
+- BLE uses Web Bluetooth runtime user prompt flow (no manifest `bluetooth` permission key).
 
 ### Docs
 - Architecture/development/protocol docs exist and were updated for current topology.

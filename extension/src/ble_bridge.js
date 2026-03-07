@@ -106,8 +106,8 @@ async function connectAndBind() {
     const ok = await connectBle({
       preferredDeviceId,
       requestOptions: {
-        filters: [{ services: ['6e400001-b5a3-f393-e0a9-e50e24dcca9e'], namePrefix: 'air-kvm' }],
-        optionalServices: ['6e400001-b5a3-f393-e0a9-e50e24dcca9e']
+        filters: [{ services: ['6e400101-b5a3-f393-e0a9-e50e24dccb01'], namePrefix: 'air-kvm' }],
+        optionalServices: ['6e400101-b5a3-f393-e0a9-e50e24dccb01']
       },
       onCommand: async (command) => {
         const unwrapped = unwrapCommand(command);

@@ -2,12 +2,15 @@
 
 namespace {
 constexpr const char* kDeviceName = "air-kvm-poc";
-constexpr const char* kServiceUuid = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
-constexpr const char* kRxCharUuid = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E";
-constexpr const char* kTxCharUuid = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E";
+constexpr const char* kServiceUuid = "6E400101-B5A3-F393-E0A9-E50E24DCCB01";
+constexpr const char* kRxCharUuid = "6E400102-B5A3-F393-E0A9-E50E24DCCB01";
+constexpr const char* kTxCharUuid = "6E400103-B5A3-F393-E0A9-E50E24DCCB01";
 
 #ifndef AIRKVM_FW_VERSION
 #define AIRKVM_FW_VERSION "dev"
+#endif
+#ifndef AIRKVM_ENABLE_HID
+#define AIRKVM_ENABLE_HID 0
 #endif
 #define AIRKVM_FW_BUILT_AT __DATE__ " " __TIME__
 
@@ -32,7 +35,9 @@ void AirKvmApp::Setup() {
   NimBLEDevice::init(kDeviceName);
   NimBLEServer* server = NimBLEDevice::createServer();
   NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
-  hid_.Setup(server, advertising);
+  if (AIRKVM_ENABLE_HID) {
+    hid_.Setup(server, advertising);
+  }
 
   NimBLEService* service = server->createService(kServiceUuid);
 

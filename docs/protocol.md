@@ -53,9 +53,9 @@ Tool: `airkvm_screenshot_tab` / `airkvm_screenshot_desktop`
 ## BLE Manual Testing
 
 Device GATT profile:
-- Service UUID: `6E400001-B5A3-F393-E0A9-E50E24DCCA9E`
-- RX (write/write-no-response): `6E400002-B5A3-F393-E0A9-E50E24DCCA9E`
-- TX (notify/read): `6E400003-B5A3-F393-E0A9-E50E24DCCA9E`
+- Service UUID: `6E400101-B5A3-F393-E0A9-E50E24DCCB01`
+- RX (write/write-no-response): `6E400102-B5A3-F393-E0A9-E50E24DCCB01`
+- TX (notify/read): `6E400103-B5A3-F393-E0A9-E50E24DCCB01`
 
 Important:
 - Write UTF-8 JSON text to RX characteristic (not numbers like `8`).

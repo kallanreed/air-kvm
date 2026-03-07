@@ -35,7 +35,7 @@ test('connectBle establishes UART RX characteristic via navigator.bluetooth', as
 
   assert.equal(connected, true);
   assert.equal(posted, true);
-  assert.deepEqual(requested.filters, [{ services: ['6e400001-b5a3-f393-e0a9-e50e24dcca9e'] }]);
+  assert.deepEqual(requested.filters, [{ services: ['6e400101-b5a3-f393-e0a9-e50e24dccb01'] }]);
   assert.equal(writes.length, 1);
 });
 
