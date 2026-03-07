@@ -1,0 +1,25 @@
+# OS/editor
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Node
+node_modules/
+coverage/
+.nyc_output/
+*.log
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# PlatformIO
+.pio/
+
+# Build artifacts
+dist/
+build/
+out/
