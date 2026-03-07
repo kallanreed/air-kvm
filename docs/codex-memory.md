@@ -103,6 +103,9 @@
   - If ping ACKs fail consecutively (`kHealthMaxMisses`), bridge now auto-disconnects and updates status.
   - Added immediate `gattserverdisconnected` callback hook from `bridge.js` into bridge page status path.
   - Purpose: avoid stale UI `Connected` state when BLE transport silently dies.
+  - Tuned for long-running screenshot operations:
+    - suspend health checks while `dom.snapshot.request` / `screenshot.request` are being handled.
+    - relaxed timeout policy (`interval=6000ms`, `timeout=4000ms`, `maxMisses=4`) to reduce false disconnects.
 
 ## In-Progress / Not Complete
 - BLE HID (HOGP) is not implemented (main blocker).

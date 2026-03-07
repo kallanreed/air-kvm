@@ -19,16 +19,19 @@ const kHandshakeTimeoutMs = 6000;
 const kHandshakeAttempts = 3;
 const kPreferredDeviceStorageKey = 'blePreferredDeviceId';
 const kMaxLogLines = 250;
-const kHealthPingIntervalMs = 5000;
-const kHealthPingTimeoutMs = 3000;
-const kHealthMaxMisses = 2;
+const kHealthPingIntervalMs = 6000;
+const kHealthPingTimeoutMs = 4000;
+const kHealthMaxMisses = 4;
+const kHealthSuspendMsDom = 15000;
+const kHealthSuspendMsScreenshot = 45000;
 let logLines = [];
 let connectInFlight = false;
 let disconnectInFlight = false;
 let healthTimer = null;
 let healthState = {
   misses: 0,
-  pendingPingResolve: null
+  pendingPingResolve: null,
+  suspendedUntil: 0
 };
 
 function appendLog(line) {
@@ -116,6 +119,11 @@ function waitForHealthAck() {
 
 function noteControlFrameForHealth(unwrapped) {
   if (!unwrapped) return;
+  if (unwrapped.type === 'dom.snapshot.request') {
+    healthState.suspendedUntil = Math.max(healthState.suspendedUntil, Date.now() + kHealthSuspendMsDom);
+  } else if (unwrapped.type === 'screenshot.request') {
+    healthState.suspendedUntil = Math.max(healthState.suspendedUntil, Date.now() + kHealthSuspendMsScreenshot);
+  }
   if (!healthState.pendingPingResolve) return;
   if (unwrapped.type === 'state' || typeof unwrapped.ok === 'boolean') {
     healthState.pendingPingResolve(true);
@@ -125,6 +133,9 @@ function noteControlFrameForHealth(unwrapped) {
 function startHealthWatchdog() {
   stopHealthWatchdog();
   healthTimer = setInterval(async () => {
+    if (Date.now() < healthState.suspendedUntil) {
+      return;
+    }
     const info = getConnectedDeviceInfo();
     if (!info.connected) {
       debugLog('health disconnected at gatt layer');
