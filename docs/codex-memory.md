@@ -63,6 +63,7 @@
   - Logs connected device info immediately after GATT connect (before handshake success/failure).
   - Logs raw notification hex bytes (`rx notify`) from TX characteristic.
   - On handshake timeout, attempts `readValue()` snapshot on TX characteristic and logs bytes/hex/text.
+  - Logs full GATT service/characteristic inventory (`gatt services`) and selected service/RX/TX UUID+properties on connect.
 
 ## In-Progress / Not Complete
 - BLE HID (HOGP) is not implemented (main blocker).

@@ -22,6 +22,41 @@ function bytesToHex(view) {
   return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join(' ');
 }
 
+function propsToObject(props) {
+  if (!props) return {};
+  return {
+    broadcast: Boolean(props.broadcast),
+    read: Boolean(props.read),
+    writeWithoutResponse: Boolean(props.writeWithoutResponse),
+    write: Boolean(props.write),
+    notify: Boolean(props.notify),
+    indicate: Boolean(props.indicate),
+    authenticatedSignedWrites: Boolean(props.authenticatedSignedWrites),
+    reliableWrite: Boolean(props.reliableWrite),
+    writableAuxiliaries: Boolean(props.writableAuxiliaries)
+  };
+}
+
+async function describeGatt(server) {
+  if (!server || typeof server.getPrimaryServices !== 'function') return null;
+  const services = await server.getPrimaryServices();
+  const out = [];
+  for (const service of services) {
+    const chars = typeof service.getCharacteristics === 'function'
+      ? await service.getCharacteristics()
+      : [];
+    out.push({
+      service: service?.uuid || null,
+      isPrimary: Boolean(service?.isPrimary),
+      characteristics: chars.map((c) => ({
+        uuid: c?.uuid || null,
+        properties: propsToObject(c?.properties)
+      }))
+    });
+  }
+  return out;
+}
+
 let bleDevice = null;
 let rxCharacteristic = null;
 let txCharacteristic = null;
@@ -77,9 +112,20 @@ export async function connectBle(deps = {}) {
   const device = await pickDevice(navigatorLike, deps);
 
   const server = await device.gatt.connect();
+  try {
+    const gatt = await describeGatt(server);
+    debugLog('gatt services', gatt);
+  } catch (err) {
+    debugLog('gatt describe failed', String(err?.message || err));
+  }
   const service = await server.getPrimaryService(UART_SERVICE_UUID);
   const rx = await service.getCharacteristic(UART_RX_CHAR_UUID);
   const tx = await service.getCharacteristic(UART_TX_CHAR_UUID);
+  debugLog('selected chars', {
+    service: service?.uuid || null,
+    rx: { uuid: rx?.uuid || null, properties: propsToObject(rx?.properties) },
+    tx: { uuid: tx?.uuid || null, properties: propsToObject(tx?.properties) }
+  });
   debugLog('connectBle characteristics ready');
 
   bleDevice = device;
