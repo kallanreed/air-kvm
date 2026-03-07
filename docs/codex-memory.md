@@ -33,6 +33,9 @@
   - `src/ble_bridge.html` + `src/ble_bridge.js` is the primary BLE context.
   - Service worker forwards BLE post/command traffic via runtime messages to that page (`ble.post`, `ble.command`).
   - Action click opens/activates bridge tab and shows `TAB` badge.
+- Extension debug logging:
+  - Added verbose logs in service worker (`[airkvm-sw]`), BLE bridge page (`[airkvm-bridge]`), and BLE transport module (`[airkvm-ble]`).
+  - Intended to debug live DOM/screenshot command flow across bridge + runtime message hops.
 
 ## In-Progress / Not Complete
 - BLE HID (HOGP) is not implemented (main blocker).

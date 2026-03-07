@@ -1,5 +1,11 @@
 import { dataUrlToMetaAndChunks, resolveScreenshotConfig } from './screenshot_protocol.js';
 const kBleBridgePagePath = 'src/ble_bridge.html';
+const kDebug = true;
+
+function debugLog(...args) {
+  if (!kDebug) return;
+  console.log('[airkvm-sw]', ...args);
+}
 
 function setBadge(text, color) {
   if (!chrome?.action?.setBadgeText || !chrome?.action?.setBadgeBackgroundColor) return;
@@ -18,16 +24,23 @@ async function ensureBleBridgePage() {
   if (!chrome?.tabs?.query || !chrome?.tabs?.create) return false;
   const url = chrome.runtime.getURL(kBleBridgePagePath);
   const existing = await chrome.tabs.query({ url });
-  if (existing.length > 0) return true;
+  if (existing.length > 0) {
+    debugLog('bridge page already open', { count: existing.length });
+    return true;
+  }
+  debugLog('opening bridge page');
   await chrome.tabs.create({ url, active: true });
   return true;
 }
 
 async function postEventViaBridge(payload) {
+  debugLog('postEventViaBridge tx', { type: payload?.type, keys: Object.keys(payload || {}) });
   try {
     const res = await chrome.runtime.sendMessage({ type: 'ble.post', target: 'ble-page', payload });
+    debugLog('postEventViaBridge rx', res);
     return Boolean(res?.ok);
   } catch {
+    debugLog('postEventViaBridge failed');
     return false;
   }
 }
@@ -35,6 +48,7 @@ async function postEventViaBridge(payload) {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || typeof msg.type !== 'string') return;
   if (msg.target === 'ble-page') return;
+  debugLog('runtime message from content', { type: msg.type, tabId: sender?.tab?.id ?? null });
 
   postEventViaBridge({ ...msg, tabId: sender?.tab?.id ?? null })
     .then((ok) => sendResponse({ ok }))
@@ -161,10 +175,12 @@ async function compressDataUrlToJpeg(dataUrl, config) {
 }
 
 async function sendDomSnapshot(command) {
+  debugLog('sendDomSnapshot start', command);
   const requestId = command.request_id || makeRequestId();
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (!tab?.id) throw new Error('active_tab_not_found');
   const summary = await chrome.tabs.sendMessage(tab.id, { type: 'request.dom.summary' });
+  debugLog('sendDomSnapshot got summary', { tabId: tab.id, title: summary?.title ?? null });
   await postEventViaBridge({
     type: 'dom.snapshot',
     request_id: requestId,
@@ -175,11 +191,13 @@ async function sendDomSnapshot(command) {
 }
 
 async function sendScreenshot(command) {
+  debugLog('sendScreenshot start', command);
   const source = command.source === 'desktop' ? 'desktop' : 'tab';
   const requestId = command.request_id || makeRequestId();
   const config = resolveScreenshotConfig(command);
   const encoded = source === 'desktop' ? await captureDesktopPng(config) : await captureTabPng(config);
   const { meta, chunks } = dataUrlToMetaAndChunks(encoded.dataUrl, requestId, source, encoded);
+  debugLog('sendScreenshot encoded', { source, requestId, chunks: chunks.length, totalChars: meta.tch });
   await postEventViaBridge(meta);
   for (const chunk of chunks) {
     // BLE payloads are chunked to reduce risk of exceeding negotiated MTU.
@@ -188,11 +206,13 @@ async function sendScreenshot(command) {
 }
 
 async function handleBleCommand(command) {
+  debugLog('handleBleCommand', command);
   if (!command || typeof command.type !== 'string') return;
   if (command.type === 'dom.snapshot.request') {
     try {
       await sendDomSnapshot(command);
     } catch (err) {
+      debugLog('sendDomSnapshot error', String(err?.message || err));
       await postEventViaBridge({
         type: 'dom.snapshot.error',
         request_id: command.request_id || null,
@@ -206,6 +226,7 @@ async function handleBleCommand(command) {
     try {
       await sendScreenshot(command);
     } catch (err) {
+      debugLog('sendScreenshot error', String(err?.message || err));
       await postEventViaBridge({
         type: 'screenshot.error',
         request_id: command.request_id || null,
@@ -219,6 +240,7 @@ async function handleBleCommand(command) {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (!msg || msg.type !== 'ble.command') return;
+  debugLog('runtime ble.command', msg.command);
   handleBleCommand(msg.command)
     .then(() => sendResponse({ ok: true }))
     .catch((err) => sendResponse({ ok: false, error: String(err?.message || err) }));
@@ -226,6 +248,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 chrome.action.onClicked.addListener(async (tab) => {
+  debugLog('action clicked', { tabId: tab?.id ?? null });
   setBadge('...', '#5B6CFF');
   try {
     await ensureBleBridgePage();
