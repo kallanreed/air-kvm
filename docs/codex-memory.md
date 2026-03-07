@@ -94,6 +94,10 @@
   - When the bridge is not actively connected/subscribed, firmware still echoes `dom.snapshot.request` / `screenshot.request` and emits `{ "ok": true }` on UART, but no `rx.ble` response frames follow.
   - MCP then returns `transport_error` with `device_timeout`.
   - Practical pre-check before MCP tool calls: bridge page must show `Connected` after successful handshake.
+- Screenshot permission fix (March 7, 2026):
+  - Live `airkvm_screenshot_tab` returned explicit error:
+    - `Either the '<all_urls>' or 'activeTab' permission is required.`
+  - Added `host_permissions: ["<all_urls>"]` to extension manifest to allow non-click-driven screenshot requests.
 
 ## In-Progress / Not Complete
 - BLE HID (HOGP) is not implemented (main blocker).
