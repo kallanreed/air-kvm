@@ -79,7 +79,17 @@ test('screenshot collector reassembles chunks in sequence order', () => {
   const command = { type: 'screenshot.request', source: 'tab', request_id: 'shot-1' };
   const collect = createResponseCollector('airkvm_screenshot_tab', command);
 
-  assert.equal(collect({ type: 'screenshot.meta', request_id: 'shot-1', source: 'tab', mime: 'image/png', total_chunks: 2, total_chars: 6 }), null);
+  assert.equal(
+    collect({
+      type: 'screenshot.meta',
+      request_id: 'shot-1',
+      source: 'tab',
+      mime: 'application/octet-stream',
+      total_chunks: 2,
+      total_chars: 6
+    }),
+    null
+  );
   assert.equal(collect({ type: 'screenshot.chunk', request_id: 'shot-1', source: 'tab', seq: 1, data: 'DEF' }), null);
   const done = collect({ type: 'screenshot.chunk', request_id: 'shot-1', source: 'tab', seq: 0, data: 'ABC' });
 
@@ -111,7 +121,10 @@ test('screenshot collector supports compact screenshot frame keys', () => {
   const command = { type: 'screenshot.request', source: 'tab', request_id: 'shot-compact' };
   const collect = createResponseCollector('airkvm_screenshot_tab', command);
 
-  assert.equal(collect({ type: 'screenshot.meta', rid: 'shot-compact', src: 'tab', m: 'image/jpeg', tc: 2, tch: 6 }), null);
+  assert.equal(
+    collect({ type: 'screenshot.meta', rid: 'shot-compact', src: 'tab', m: 'application/octet-stream', tc: 2, tch: 6 }),
+    null
+  );
   assert.equal(collect({ type: 'screenshot.chunk', rid: 'shot-compact', src: 'tab', q: 0, d: 'ABC' }), null);
   const done = collect({ type: 'screenshot.chunk', rid: 'shot-compact', src: 'tab', q: 1, d: 'DEF' });
 
@@ -119,7 +132,7 @@ test('screenshot collector supports compact screenshot frame keys', () => {
   assert.equal(done.ok, true);
   assert.equal(done.data.request_id, 'shot-compact');
   assert.equal(done.data.source, 'tab');
-  assert.equal(done.data.mime, 'image/jpeg');
+  assert.equal(done.data.mime, 'application/octet-stream');
   assert.equal(done.data.total_chunks, 2);
   assert.equal(done.data.base64, 'ABCDEF');
 });
@@ -151,7 +164,10 @@ test('screenshot collector decodes b64z payload back to base64 image', () => {
   const imageBytes = Buffer.from('hello-image-bytes');
   const zipped = gzipSync(imageBytes).toString('base64');
 
-  assert.equal(collect({ type: 'screenshot.meta', rid: 'shot-z', src: 'tab', m: 'image/jpeg', tc: 1, tch: zipped.length, e: 'b64z' }), null);
+  assert.equal(
+    collect({ type: 'screenshot.meta', rid: 'shot-z', src: 'tab', m: 'application/octet-stream', tc: 1, tch: zipped.length, e: 'b64z' }),
+    null
+  );
   const done = collect({ type: 'screenshot.chunk', rid: 'shot-z', src: 'tab', q: 0, d: zipped });
 
   assert.equal(done.done, true);
@@ -170,7 +186,7 @@ test('screenshot collector supports transfer.* frames and emits done ack', () =>
       request_id: 'shot-transfer',
       transfer_id: 'tx-1',
       source: 'tab',
-      mime: 'image/jpeg',
+      mime: 'application/octet-stream',
       total_chunks: 2,
       total_chars: 6
     }),

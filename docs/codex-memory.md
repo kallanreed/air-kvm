@@ -207,6 +207,22 @@
   - Added `INVESTIGATOR` role as mandatory for unclear failures.
   - Investigator gate requires evidence-first root-cause analysis (logs/traces/code-path proof/disproof), not speculative explanations.
   - Persisted in `manager_plan.md` and `notes.md` so future runs enforce root-cause accountability.
+- Screenshot transfer lifecycle finding (March 8, 2026):
+  - Root cause of repeated `b64z` timeout while SW showed `transfer.done`:
+    - `transfer.done.ack` was incorrectly handled as regular `transfer.ack`, so completed sessions were never deleted in extension SW.
+    - Stale session traffic could continue and starve subsequent screenshot requests.
+  - Fix:
+    - Added dedicated `handleTransferDoneAck` that removes transfer session on done-ack.
+    - Added strict single-active-transfer gate in `sendScreenshot`; new screenshot requests fail fast with `screenshot_transfer_busy:<transfer_id>` if any transfer session is still active.
+  - Temporary MCP debug aid:
+    - MCP screenshot tool success path now writes decoded image to `temp/` and returns `saved_path`/`saved_bytes`.
+    - Explicit TODO added to remove this autosave after reliability testing.
+  - Follow-up hardening:
+    - Extension now handles `transfer.done.ack` separately and deletes completed transfer sessions (prevents stale session starvation).
+    - Extension enforces one active screenshot transfer session at a time (`screenshot_transfer_busy:<transfer_id>` on overlap).
+    - MCP collector now ignores `transfer.chunk` frames until `transfer.meta` is observed for that request.
+    - MCP collector validates image magic bytes for `image/jpeg` and `image/png`; invalid payload returns `screenshot_corrupt_payload`.
+    - MCP screenshot autosave is now opt-in behind `AIRKVM_SAVE_SCREENSHOTS=1` to avoid test pollution.
 - UART noise reduction (March 7, 2026, investigator action):
   - Stopped mirroring BLE ingress payload logs (`rx.ble ...`) to UART in `CommandRouter::ProcessLine`.
   - Rationale: BLE command echo on UART created heavy log noise and increased risk of framing interleaving/parse confusion during screenshot transfers.

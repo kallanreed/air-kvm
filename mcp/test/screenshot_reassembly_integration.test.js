@@ -54,7 +54,14 @@ test('reassembles large out-of-order screenshot stream', async () => {
     chunks.push({ type: 'screenshot.chunk', rid: requestId, src: 'tab', q: i, d });
   }
   const frames = [
-    { type: 'screenshot.meta', rid: requestId, src: 'tab', m: 'image/jpeg', tc: chunkCount, tch: parts.join('').length },
+    {
+      type: 'screenshot.meta',
+      rid: requestId,
+      src: 'tab',
+      m: 'application/octet-stream',
+      tc: chunkCount,
+      tch: parts.join('').length
+    },
     ...chunks.reverse()
   ];
   const { sent, server } = makeServerHarnessWithFrames({ [requestId]: frames });
@@ -70,7 +77,7 @@ test('reassembles large out-of-order screenshot stream', async () => {
 test('missing screenshot chunk results in structured transport timeout error', async () => {
   const requestId = 'shot-missing-1';
   const frames = [
-    { type: 'screenshot.meta', rid: requestId, src: 'tab', m: 'image/jpeg', tc: 3, tch: 9 },
+    { type: 'screenshot.meta', rid: requestId, src: 'tab', m: 'application/octet-stream', tc: 3, tch: 9 },
     { type: 'screenshot.chunk', rid: requestId, src: 'tab', q: 0, d: 'AAA' },
     { type: 'screenshot.chunk', rid: requestId, src: 'tab', q: 2, d: 'CCC' }
   ];
@@ -87,7 +94,7 @@ test('missing screenshot chunk results in structured transport timeout error', a
 test('oversized screenshot stream is rejected with structured size error', async () => {
   const requestId = 'shot-oversize-1';
   const frames = [
-    { type: 'screenshot.meta', rid: requestId, src: 'tab', m: 'image/jpeg', tc: 1, tch: 90001 },
+    { type: 'screenshot.meta', rid: requestId, src: 'tab', m: 'application/octet-stream', tc: 1, tch: 90001 },
     { type: 'screenshot.chunk', rid: requestId, src: 'tab', q: 0, d: 'A'.repeat(90001) }
   ];
   const { sent, server } = makeServerHarnessWithFrames({ [requestId]: frames });
@@ -112,4 +119,3 @@ test('explicit screenshot.error is surfaced as structured tool error', async () 
   assert.equal(payload.request_id, requestId);
   assert.equal(payload.error, 'desktop_capture_denied');
 });
-

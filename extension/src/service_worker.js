@@ -201,6 +201,14 @@ function pruneScreenshotTransfers(nowTs = Date.now()) {
   }
 }
 
+function getSingleActiveTransfer() {
+  pruneScreenshotTransfers();
+  for (const [transferId, session] of screenshotTransfers.entries()) {
+    if (session && transferId) return session;
+  }
+  return null;
+}
+
 function withTimeout(promise, ms, errorCode) {
   let timeoutId = null;
   const timeoutPromise = new Promise((_, reject) => {
@@ -337,6 +345,10 @@ async function sendDomSnapshot(command) {
 }
 
 async function sendScreenshot(command) {
+  const activeTransfer = getSingleActiveTransfer();
+  if (activeTransfer) {
+    throw new Error(`screenshot_transfer_busy:${activeTransfer.transferId}`);
+  }
   if (screenshotInFlight) {
     throw new Error('screenshot_busy');
   }
@@ -539,6 +551,25 @@ async function handleTransferAck(command) {
   });
 }
 
+async function handleTransferDoneAck(command) {
+  pruneScreenshotTransfers();
+  const transferId = command?.transfer_id;
+  const session = transferId ? screenshotTransfers.get(transferId) : null;
+  if (!session) {
+    await sendTransferError(command, 'no_such_transfer');
+    return;
+  }
+  screenshotTransfers.delete(transferId);
+  void writeSwBreadcrumb('transfer_done_ack', {
+    request_id: session.requestId,
+    transfer_id: transferId
+  });
+  debugLog('transfer done ack', {
+    requestId: session.requestId,
+    transferId
+  });
+}
+
 async function handleTransferCancel(command) {
   const transferId = command?.transfer_id;
   if (!transferId || !screenshotTransfers.has(transferId)) {
@@ -683,12 +714,21 @@ async function handleBleCommand(command) {
     }
     return;
   }
-  if (command.type === 'transfer.ack' || command.type === 'transfer.done.ack') {
+  if (command.type === 'transfer.ack') {
     try {
       await handleTransferAck(command);
     } catch (err) {
       debugLog('handleTransferAck error', String(err?.message || err));
       await sendTransferError(command, 'transfer_ack_failed', String(err?.message || err));
+    }
+    return;
+  }
+  if (command.type === 'transfer.done.ack') {
+    try {
+      await handleTransferDoneAck(command);
+    } catch (err) {
+      debugLog('handleTransferDoneAck error', String(err?.message || err));
+      await sendTransferError(command, 'transfer_done_ack_failed', String(err?.message || err));
     }
     return;
   }

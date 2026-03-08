@@ -79,6 +79,22 @@ export function makeRequestId() {
   return `req_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
 }
 
+function base64LooksLikeMime(base64, mime) {
+  try {
+    const bytes = Buffer.from(base64, 'base64');
+    if (bytes.length < 4) return false;
+    if (mime === 'image/jpeg') {
+      return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+    }
+    if (mime === 'image/png') {
+      return bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function isKnownTool(name) {
   return TOOL_DEFINITIONS.some((tool) => tool.name === name);
 }
@@ -301,8 +317,15 @@ export function createResponseCollector(name, command) {
           chunksBySeq.set(seq, data);
         }
       } else if (msg.type === 'transfer.chunk') {
+        if (!meta) {
+          // Ignore transfer chunks until transfer meta is observed for this request.
+          return null;
+        }
         const msgTransferId = msg.transfer_id || msg.tid || null;
-        if (transferId && msgTransferId && msgTransferId !== transferId) {
+        if (!msgTransferId) {
+          return null;
+        }
+        if (transferId && msgTransferId !== transferId) {
           return null;
         }
         if (!transferId && msgTransferId) {
@@ -383,6 +406,7 @@ export function createResponseCollector(name, command) {
 
       const base64 = ordered.join('');
       let normalizedBase64 = base64;
+      const mime = (meta.mime ?? meta.m) || 'application/octet-stream';
       if (encoding === 'b64z') {
         try {
           const zipped = Buffer.from(base64, 'base64');
@@ -399,6 +423,18 @@ export function createResponseCollector(name, command) {
           };
         }
       }
+      if (!base64LooksLikeMime(normalizedBase64, mime)) {
+        return {
+          done: true,
+          ok: false,
+          data: {
+            request_id: requestId,
+            source: (meta.source ?? meta.src) || command.source,
+            error: 'screenshot_corrupt_payload',
+            detail: { mime }
+          }
+        };
+      }
       return {
         done: true,
         ok: true,
@@ -412,7 +448,7 @@ export function createResponseCollector(name, command) {
         data: {
           request_id: requestId,
           source: (meta.source ?? meta.src) || command.source,
-          mime: (meta.mime ?? meta.m) || 'application/octet-stream',
+          mime,
           total_chunks: totalChunks,
           total_chars: typeof (meta.total_chars ?? meta.tch) === 'number'
             ? (meta.total_chars ?? meta.tch)
