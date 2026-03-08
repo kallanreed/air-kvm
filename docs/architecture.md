@@ -26,7 +26,9 @@
 - Exposes tools:
   - `airkvm_send`
   - `airkvm_list_tabs`
+  - `airkvm_open_tab`
   - `airkvm_dom_snapshot`
+  - `airkvm_exec_js_tab`
   - `airkvm_screenshot_tab`
   - `airkvm_screenshot_desktop`
 - Validates and forwards control commands to firmware.
@@ -37,7 +39,9 @@
 3. Extension (`extension/`)
 - `service_worker.js` handles browser automation actions:
   - `tabs.list.request`
+  - `tab.open.request`
   - `dom.snapshot.request`
+  - `js.exec.request`
   - `screenshot.request` (tab/desktop)
 - `ble_bridge.html` + `ble_bridge.js` is the primary BLE runtime context.
   - Connects via Web Bluetooth.

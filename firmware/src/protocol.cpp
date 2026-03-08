@@ -104,6 +104,20 @@ std::optional<Command> ParseCommandLine(const std::string& line) {
     return cmd;
   }
 
+  if (Contains(line, "\"type\":\"tab.open.request\"")) {
+    cmd.type = CommandType::kTabOpenRequest;
+    cmd.request_id = ExtractString(line, "request_id");
+    cmd.raw = line;
+    return cmd;
+  }
+
+  if (Contains(line, "\"type\":\"js.exec.request\"")) {
+    cmd.type = CommandType::kJsExecRequest;
+    cmd.request_id = ExtractString(line, "request_id");
+    cmd.raw = line;
+    return cmd;
+  }
+
   if (Contains(line, "\"type\":\"screenshot.request\"")) {
     cmd.type = CommandType::kScreenshotRequest;
     cmd.source = ExtractString(line, "source");
@@ -121,6 +135,34 @@ std::optional<Command> ParseCommandLine(const std::string& line) {
 
   if (Contains(line, "\"type\":\"tabs.list\"")) {
     cmd.type = CommandType::kTabsList;
+    cmd.request_id = ExtractString(line, "request_id");
+    cmd.raw = line;
+    return cmd;
+  }
+
+  if (Contains(line, "\"type\":\"tab.open.error\"")) {
+    cmd.type = CommandType::kTabOpenError;
+    cmd.request_id = ExtractString(line, "request_id");
+    cmd.raw = line;
+    return cmd;
+  }
+
+  if (Contains(line, "\"type\":\"tab.open\"")) {
+    cmd.type = CommandType::kTabOpen;
+    cmd.request_id = ExtractString(line, "request_id");
+    cmd.raw = line;
+    return cmd;
+  }
+
+  if (Contains(line, "\"type\":\"js.exec.result\"")) {
+    cmd.type = CommandType::kJsExecResult;
+    cmd.request_id = ExtractString(line, "request_id");
+    cmd.raw = line;
+    return cmd;
+  }
+
+  if (Contains(line, "\"type\":\"js.exec.error\"")) {
+    cmd.type = CommandType::kJsExecError;
     cmd.request_id = ExtractString(line, "request_id");
     cmd.raw = line;
     return cmd;

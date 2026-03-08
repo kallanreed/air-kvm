@@ -23,10 +23,78 @@ test('tools/list includes structured tools', () => {
   assert.deepEqual(names, [
     'airkvm_send',
     'airkvm_list_tabs',
+    'airkvm_open_tab',
     'airkvm_dom_snapshot',
+    'airkvm_exec_js_tab',
     'airkvm_screenshot_tab',
     'airkvm_screenshot_desktop'
   ]);
+});
+
+test('airkvm_open_tab returns structured json content', async () => {
+  const { sent, server } = makeHarness(async () => ({
+    ok: true,
+    data: {
+      type: 'tab.open',
+      request_id: 'tab-1',
+      tab: {
+        id: 101,
+        window_id: 3,
+        active: true,
+        title: 'Example',
+        url: 'https://example.com'
+      },
+      ts: 123
+    }
+  }));
+
+  server.handleRequest({
+    jsonrpc: '2.0',
+    id: 7,
+    method: 'tools/call',
+    params: {
+      name: 'airkvm_open_tab',
+      arguments: { request_id: 'tab-1', url: 'https://example.com', active: true }
+    }
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const payload = JSON.parse(sent[0].result.content[0].text);
+  assert.equal(payload.type, 'tab.open');
+  assert.equal(payload.request_id, 'tab-1');
+  assert.equal(payload.tab.id, 101);
+});
+
+test('airkvm_exec_js_tab returns structured json content', async () => {
+  const { sent, server } = makeHarness(async () => ({
+    ok: true,
+    data: {
+      type: 'js.exec.result',
+      request_id: 'js-1',
+      tab_id: 2,
+      duration_ms: 8,
+      value_type: 'string',
+      value_json: '"ok"',
+      truncated: false,
+      ts: 100
+    }
+  }));
+
+  server.handleRequest({
+    jsonrpc: '2.0',
+    id: 6,
+    method: 'tools/call',
+    params: {
+      name: 'airkvm_exec_js_tab',
+      arguments: { request_id: 'js-1', script: 'return "ok";' }
+    }
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const payload = JSON.parse(sent[0].result.content[0].text);
+  assert.equal(payload.type, 'js.exec.result');
+  assert.equal(payload.request_id, 'js-1');
+  assert.equal(payload.value_json, '"ok"');
 });
 
 test('airkvm_list_tabs returns structured json content', async () => {

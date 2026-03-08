@@ -15,12 +15,14 @@
 ## Active Track (Option 2 Cleanup)
 Status: In progress
 
+0. [x] Add `airkvm_exec_js_tab` structured MCP/extension/firmware pass-through feature with tests/docs.
+0. [x] Add `airkvm_open_tab` structured MCP/extension/firmware pass-through feature with tests/docs.
 1. [x] Add docs/code parity guard for screenshot contract bounds.
 2. [x] Introduce shared screenshot contract constants (MCP + extension).
 3. [x] Consolidate duplicated bridge log formatting helpers.
 4. [x] Refactor service worker command handling to dispatch map + shared error wrapper.
 5. [ ] Add service-worker-specific tests (dispatch + transfer lifecycle + bridge error paths).
-6. [ ] Run focused live validation sweep after cleanup.
+6. [x] Run focused live validation sweep after cleanup (open tab -> bytebeat navigation -> play click -> tab screenshot save).
 
 ## Backlog (Option 3 Major Consolidation)
 Status: Not started

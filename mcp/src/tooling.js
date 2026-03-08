@@ -30,6 +30,19 @@ export const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'airkvm_open_tab',
+    description: 'Open a new browser tab on the target extension machine.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        request_id: { type: 'string' },
+        url: { type: 'string', maxLength: 2048 },
+        active: { type: 'boolean' }
+      },
+      required: ['request_id', 'url']
+    }
+  },
+  {
     name: 'airkvm_dom_snapshot',
     description: 'Request a DOM snapshot from the target extension over the AirKVM transport.',
     inputSchema: {
@@ -38,6 +51,21 @@ export const TOOL_DEFINITIONS = [
         request_id: { type: 'string' }
       },
       required: []
+    }
+  },
+  {
+    name: 'airkvm_exec_js_tab',
+    description: 'Execute JavaScript in the target browser tab over the AirKVM transport.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        request_id: { type: 'string' },
+        script: { type: 'string', minLength: 1, maxLength: 600 },
+        tab_id: { type: 'integer' },
+        timeout_ms: { type: 'integer', minimum: 50, maximum: 2000 },
+        max_result_chars: { type: 'integer', minimum: 64, maximum: 700 }
+      },
+      required: ['request_id', 'script']
     }
   },
   {
@@ -108,6 +136,8 @@ export function isStructuredTool(name) {
   return (
     name === 'airkvm_dom_snapshot' ||
     name === 'airkvm_list_tabs' ||
+    name === 'airkvm_open_tab' ||
+    name === 'airkvm_exec_js_tab' ||
     name === 'airkvm_screenshot_tab' ||
     name === 'airkvm_screenshot_desktop'
   );
@@ -134,8 +164,28 @@ export function buildCommandForTool(name, args = {}) {
   if (name === 'airkvm_list_tabs') {
     return { type: 'tabs.list.request', request_id: requestId };
   }
+  if (name === 'airkvm_open_tab') {
+    const command = {
+      type: 'tab.open.request',
+      request_id: requestId,
+      url: typeof args?.url === 'string' ? args.url : '',
+      active: typeof args?.active === 'boolean' ? args.active : true
+    };
+    return command;
+  }
   if (name === 'airkvm_dom_snapshot') {
     return { type: 'dom.snapshot.request', request_id: requestId };
+  }
+  if (name === 'airkvm_exec_js_tab') {
+    const command = {
+      type: 'js.exec.request',
+      request_id: requestId,
+      script: typeof args?.script === 'string' ? args.script : ''
+    };
+    if (Number.isInteger(args?.tab_id)) command.tab_id = args.tab_id;
+    if (Number.isInteger(args?.timeout_ms)) command.timeout_ms = args.timeout_ms;
+    if (Number.isInteger(args?.max_result_chars)) command.max_result_chars = args.max_result_chars;
+    return command;
   }
   if (name === 'airkvm_screenshot_tab') {
     return { type: 'screenshot.request', source: 'tab', request_id: requestId, ...screenshotOptions };
@@ -203,6 +253,66 @@ export function createResponseCollector(name, command) {
           done: true,
           ok: false,
           data: { request_id: requestId, error: msg.error || 'tabs_list_error', detail: msg }
+        };
+      }
+      return null;
+    };
+  }
+
+  if (name === 'airkvm_open_tab') {
+    const requestId = command.request_id;
+    return (msg) => {
+      if (typeof msg.ok === 'boolean' && msg.ok === false) {
+        return {
+          done: true,
+          ok: false,
+          data: { request_id: requestId, error: msg.error || 'device_rejected', device: msg }
+        };
+      }
+      if (msg.type === 'tab.open' && msg.request_id === requestId) {
+        return {
+          done: true,
+          ok: true,
+          data: msg
+        };
+      }
+      if (msg.type === 'tab.open.error' && msg.request_id === requestId) {
+        return {
+          done: true,
+          ok: false,
+          data: { request_id: requestId, error: msg.error || 'tab_open_error', detail: msg }
+        };
+      }
+      return null;
+    };
+  }
+
+  if (name === 'airkvm_exec_js_tab') {
+    const requestId = command.request_id;
+    return (msg) => {
+      if (typeof msg.ok === 'boolean' && msg.ok === false) {
+        return {
+          done: true,
+          ok: false,
+          data: { request_id: requestId, error: msg.error || 'device_rejected', device: msg }
+        };
+      }
+      if (msg.type === 'js.exec.result' && msg.request_id === requestId) {
+        return {
+          done: true,
+          ok: true,
+          data: msg
+        };
+      }
+      if (msg.type === 'js.exec.error' && msg.request_id === requestId) {
+        return {
+          done: true,
+          ok: false,
+          data: {
+            request_id: requestId,
+            error: msg.error || msg.error_code || 'js_exec_error',
+            detail: msg
+          }
         };
       }
       return null;

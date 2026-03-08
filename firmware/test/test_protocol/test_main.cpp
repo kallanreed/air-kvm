@@ -64,6 +64,24 @@ void test_parse_tabs_list_request() {
   TEST_ASSERT_EQUAL_STRING("tabs-1", cmd->request_id.c_str());
 }
 
+void test_parse_tab_open_request() {
+  const auto cmd = airkvm::ParseCommandLine(
+      "{\"type\":\"tab.open.request\",\"request_id\":\"open-1\",\"url\":\"https://example.com\",\"active\":true}");
+  TEST_ASSERT_TRUE(cmd.has_value());
+  TEST_ASSERT_EQUAL_INT(
+      static_cast<int>(airkvm::CommandType::kTabOpenRequest), static_cast<int>(cmd->type));
+  TEST_ASSERT_EQUAL_STRING("open-1", cmd->request_id.c_str());
+}
+
+void test_parse_tab_open_error() {
+  const auto cmd = airkvm::ParseCommandLine(
+      "{\"type\":\"tab.open.error\",\"request_id\":\"open-1\",\"error\":\"tabs_create_failed\"}");
+  TEST_ASSERT_TRUE(cmd.has_value());
+  TEST_ASSERT_EQUAL_INT(
+      static_cast<int>(airkvm::CommandType::kTabOpenError), static_cast<int>(cmd->type));
+  TEST_ASSERT_EQUAL_STRING("open-1", cmd->request_id.c_str());
+}
+
 void test_parse_transfer_resume() {
   const auto cmd = airkvm::ParseCommandLine(
       "{\"type\":\"transfer.resume\",\"request_id\":\"shot-1\",\"transfer_id\":\"tx-1\",\"from_seq\":10}");
@@ -71,6 +89,33 @@ void test_parse_transfer_resume() {
   TEST_ASSERT_EQUAL_INT(
       static_cast<int>(airkvm::CommandType::kTransferResume), static_cast<int>(cmd->type));
   TEST_ASSERT_EQUAL_STRING("shot-1", cmd->request_id.c_str());
+}
+
+void test_parse_js_exec_request() {
+  const auto cmd = airkvm::ParseCommandLine(
+      "{\"type\":\"js.exec.request\",\"request_id\":\"js-1\",\"script\":\"return document.title;\"}");
+  TEST_ASSERT_TRUE(cmd.has_value());
+  TEST_ASSERT_EQUAL_INT(
+      static_cast<int>(airkvm::CommandType::kJsExecRequest), static_cast<int>(cmd->type));
+  TEST_ASSERT_EQUAL_STRING("js-1", cmd->request_id.c_str());
+}
+
+void test_parse_js_exec_result() {
+  const auto cmd = airkvm::ParseCommandLine(
+      "{\"type\":\"js.exec.result\",\"request_id\":\"js-1\",\"value_json\":\"\\\"ok\\\"\"}");
+  TEST_ASSERT_TRUE(cmd.has_value());
+  TEST_ASSERT_EQUAL_INT(
+      static_cast<int>(airkvm::CommandType::kJsExecResult), static_cast<int>(cmd->type));
+  TEST_ASSERT_EQUAL_STRING("js-1", cmd->request_id.c_str());
+}
+
+void test_parse_js_exec_error() {
+  const auto cmd = airkvm::ParseCommandLine(
+      "{\"type\":\"js.exec.error\",\"request_id\":\"js-1\",\"error_code\":\"js_exec_runtime_error\"}");
+  TEST_ASSERT_TRUE(cmd.has_value());
+  TEST_ASSERT_EQUAL_INT(
+      static_cast<int>(airkvm::CommandType::kJsExecError), static_cast<int>(cmd->type));
+  TEST_ASSERT_EQUAL_STRING("js-1", cmd->request_id.c_str());
 }
 
 void test_ack_json_ok() {
@@ -88,7 +133,12 @@ int main(int, char**) {
   RUN_TEST(test_parse_dom_snapshot_request);
   RUN_TEST(test_parse_screenshot_chunk);
   RUN_TEST(test_parse_tabs_list_request);
+  RUN_TEST(test_parse_tab_open_request);
+  RUN_TEST(test_parse_tab_open_error);
   RUN_TEST(test_parse_transfer_resume);
+  RUN_TEST(test_parse_js_exec_request);
+  RUN_TEST(test_parse_js_exec_result);
+  RUN_TEST(test_parse_js_exec_error);
   RUN_TEST(test_ack_json_ok);
   return UNITY_END();
 }

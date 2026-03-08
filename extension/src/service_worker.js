@@ -7,11 +7,22 @@ const kScreenshotCaptureTimeoutMs = 25000;
 const kScreenshotStageTimeoutMs = 10000;
 const kTransferAckWindow = 8;
 const kTransferTtlMs = 2 * 60 * 1000;
+const kJsExecScriptMinChars = 1;
+const kJsExecScriptMaxChars = 600;
+const kJsExecTimeoutMsMin = 50;
+const kJsExecTimeoutMsMax = 2000;
+const kJsExecTimeoutMsDefault = 750;
+const kJsExecResultCharsMin = 64;
+const kJsExecResultCharsMax = 700;
+const kJsExecResultCharsDefault = 256;
+const kJsExecErrorMaxChars = 300;
+const kJsExecPostTimeoutHoldMs = 1000;
 const kSwHeartbeatIntervalMs = 5000;
 const kSwBreadcrumbStorageKey = 'airkvm_sw_breadcrumb';
 let lastAutomationTabId = null;
 let bridgeTraceSeq = 0;
 let screenshotInFlight = false;
+let jsExecInFlight = false;
 const screenshotTransfers = new Map();
 const kSwInstanceId = `sw_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
 let debugEnabled = kDebugDefault;
@@ -109,6 +120,13 @@ function isAutomationCandidateTab(tab) {
     return false;
   }
   return true;
+}
+
+function isTrustedBleCommandSender(sender) {
+  if (!sender || sender.id !== chrome.runtime.id) return false;
+  const expectedBridgeUrl = chrome.runtime.getURL(kBleBridgePagePath);
+  const senderUrl = String(sender.url || sender?.tab?.url || '');
+  return senderUrl === expectedBridgeUrl || senderUrl.startsWith(`${expectedBridgeUrl}#`);
 }
 
 async function resolveTargetTab(preferredTabId = null) {
@@ -263,6 +281,214 @@ function withTimeout(promise, ms, errorCode) {
   return Promise.race([promise, timeoutPromise]).finally(() => {
     if (timeoutId !== null) clearTimeout(timeoutId);
   });
+}
+
+function clampInt(value, min, max, fallback) {
+  if (!Number.isInteger(value)) return fallback;
+  return Math.min(max, Math.max(min, value));
+}
+
+function clipText(value, maxChars = kJsExecErrorMaxChars) {
+  const text = String(value ?? '');
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}...`;
+}
+
+function normalizeJsExecCommand(command) {
+  const script = typeof command?.script === 'string' ? command.script : '';
+  if (script.length < kJsExecScriptMinChars || script.length > kJsExecScriptMaxChars) {
+    throw new Error('invalid_js_exec_request');
+  }
+  return {
+    requestId: command.request_id || makeRequestId(),
+    script,
+    tabId: Number.isInteger(command?.tab_id) ? command.tab_id : null,
+    timeoutMs: clampInt(command?.timeout_ms, kJsExecTimeoutMsMin, kJsExecTimeoutMsMax, kJsExecTimeoutMsDefault),
+    maxResultChars: clampInt(
+      command?.max_result_chars,
+      kJsExecResultCharsMin,
+      kJsExecResultCharsMax,
+      kJsExecResultCharsDefault
+    )
+  };
+}
+
+async function executeScriptInMainWorld(tabId, script, maxResultChars) {
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: async (userScript, maxChars) => {
+      function valueTypeOf(value) {
+        if (value === null) return 'null';
+        if (Array.isArray(value)) return 'array';
+        return typeof value;
+      }
+
+      function safeSerialize(value) {
+        const seen = new WeakSet();
+        const typedLiteral = (kind, payload = null) => JSON.stringify({
+          __airkvm_type: kind,
+          value: payload
+        });
+        if (typeof value === 'undefined') return typedLiteral('undefined');
+        if (typeof value === 'function') return typedLiteral('function', value.name || null);
+        if (typeof value === 'symbol') return typedLiteral('symbol', String(value));
+        if (typeof value === 'bigint') return typedLiteral('bigint', value.toString());
+        try {
+          const encoded = JSON.stringify(value, (_key, candidate) => {
+            if (typeof candidate === 'undefined') return { __airkvm_type: 'undefined' };
+            if (typeof candidate === 'function') {
+              return { __airkvm_type: 'function', value: candidate.name || null };
+            }
+            if (typeof candidate === 'symbol') return { __airkvm_type: 'symbol', value: String(candidate) };
+            if (typeof candidate === 'bigint') return { __airkvm_type: 'bigint', value: candidate.toString() };
+            if (candidate && typeof candidate === 'object') {
+              if (seen.has(candidate)) return { __airkvm_type: 'circular' };
+              seen.add(candidate);
+            }
+            return candidate;
+          });
+          return typeof encoded === 'string' ? encoded : 'null';
+        } catch (err) {
+          return typedLiteral('unserializable', String(err?.message || err));
+        }
+      }
+
+      let compiled = null;
+      try {
+        compiled = new Function(userScript);
+      } catch (err) {
+        return {
+          ok: false,
+          error_code: 'js_exec_compile_error',
+          error: String(err?.message || err)
+        };
+      }
+
+      try {
+        let value = compiled();
+        if (value && typeof value.then === 'function') {
+          value = await value;
+        }
+        let valueJson = safeSerialize(value);
+        let truncated = false;
+        if (valueJson.length > maxChars) {
+          valueJson = valueJson.slice(0, maxChars);
+          truncated = true;
+        }
+        return {
+          ok: true,
+          value_type: valueTypeOf(value),
+          value_json: valueJson,
+          truncated
+        };
+      } catch (err) {
+        return {
+          ok: false,
+          error_code: 'js_exec_runtime_error',
+          error: String(err?.message || err)
+        };
+      }
+    },
+    args: [script, maxResultChars]
+  });
+  return Array.isArray(results) && results.length > 0 ? results[0]?.result : null;
+}
+
+async function postJsExecError(requestId, tabId, startedAt, errorCode, message) {
+  await postEventViaBridge({
+    type: 'js.exec.error',
+    request_id: requestId || null,
+    tab_id: Number.isInteger(tabId) ? tabId : null,
+    duration_ms: Math.max(0, Date.now() - startedAt),
+    error_code: errorCode,
+    error: clipText(message || errorCode),
+    ts: Date.now()
+  });
+}
+
+async function sendJsExec(command) {
+  const startedAt = Date.now();
+  let requestId = command?.request_id || makeRequestId();
+  let resolvedTabId = Number.isInteger(command?.tab_id) ? command.tab_id : null;
+  let keepLockedUntilScriptSettles = false;
+  let pendingExecution = null;
+  if (jsExecInFlight) {
+    await postJsExecError(requestId, resolvedTabId, startedAt, 'js_exec_busy', 'js_exec_busy');
+    return;
+  }
+  jsExecInFlight = true;
+  try {
+    const normalized = normalizeJsExecCommand(command);
+    requestId = normalized.requestId;
+    resolvedTabId = normalized.tabId;
+    const tab = await resolveTargetTab(normalized.tabId);
+    if (!tab?.id) {
+      throw new Error('active_tab_not_found');
+    }
+    resolvedTabId = tab.id;
+    lastAutomationTabId = tab.id;
+    const executionPromise = executeScriptInMainWorld(tab.id, normalized.script, normalized.maxResultChars);
+    pendingExecution = executionPromise;
+    const result = await withTimeout(
+      executionPromise,
+      normalized.timeoutMs,
+      'js_exec_timeout'
+    );
+    if (!result || typeof result !== 'object') {
+      throw new Error('js_exec_invalid_result');
+    }
+    if (result.ok !== true) {
+      await postJsExecError(
+        requestId,
+        resolvedTabId,
+        startedAt,
+        result.error_code || 'js_exec_failed',
+        result.error || result.error_code || 'js_exec_failed'
+      );
+      return;
+    }
+    await postEventViaBridge({
+      type: 'js.exec.result',
+      request_id: requestId,
+      tab_id: resolvedTabId,
+      duration_ms: Math.max(0, Date.now() - startedAt),
+      value_type: typeof result.value_type === 'string' ? result.value_type : 'unknown',
+      value_json: typeof result.value_json === 'string' ? result.value_json : 'null',
+      truncated: Boolean(result.truncated),
+      ts: Date.now()
+    });
+  } catch (err) {
+    const detail = String(err?.message || err);
+    if (detail === 'js_exec_timeout') {
+      keepLockedUntilScriptSettles = true;
+      let released = false;
+      const releaseLock = () => {
+        if (released) return;
+        released = true;
+        jsExecInFlight = false;
+      };
+      const holdTimer = setTimeout(() => {
+        releaseLock();
+      }, kJsExecPostTimeoutHoldMs);
+      void pendingExecution?.finally(() => {
+        clearTimeout(holdTimer);
+        releaseLock();
+      });
+    }
+    const code = detail === 'js_exec_timeout'
+      ? 'js_exec_timeout'
+      : detail === 'active_tab_not_found'
+        ? 'js_exec_tab_not_found'
+        : detail === 'invalid_js_exec_request'
+          ? 'invalid_js_exec_request'
+          : 'js_exec_failed';
+    await postJsExecError(requestId, resolvedTabId, startedAt, code, detail);
+  } finally {
+    if (!keepLockedUntilScriptSettles) {
+      jsExecInFlight = false;
+    }
+  }
 }
 
 async function postBinaryOrThrow(bytes) {
@@ -717,6 +943,34 @@ async function sendTabsList(command) {
   });
 }
 
+async function sendOpenTab(command) {
+  const requestId = command?.request_id || makeRequestId();
+  const url = typeof command?.url === 'string' ? command.url : '';
+  const active = typeof command?.active === 'boolean' ? command.active : true;
+
+  if (!url || url.length > 2048 || (!url.startsWith('http://') && !url.startsWith('https://'))) {
+    throw new Error('invalid_tab_open_request');
+  }
+
+  const tab = await chrome.tabs.create({ url, active });
+  const normalizedTab = {
+    id: tab?.id ?? null,
+    window_id: tab?.windowId ?? null,
+    active: Boolean(tab?.active),
+    title: tab?.title || '',
+    url: tab?.url || url
+  };
+  if (isAutomationCandidateTab(tab) && Number.isInteger(tab?.id)) {
+    lastAutomationTabId = tab.id;
+  }
+  await postEventViaBridge({
+    type: 'tab.open',
+    request_id: requestId,
+    tab: normalizedTab,
+    ts: Date.now()
+  });
+}
+
 async function runBridgeHandler(command, label, handler, onError) {
   try {
     await handler(command);
@@ -764,6 +1018,35 @@ const kBleCommandHandlers = {
         type: 'tabs.list.error',
         request_id: cmd.request_id || null,
         error: detail,
+        ts: Date.now()
+      });
+    }
+  ),
+  'tab.open.request': (command) => runBridgeHandler(
+    command,
+    'sendOpenTab',
+    sendOpenTab,
+    async (cmd, detail) => {
+      await postEventViaBridge({
+        type: 'tab.open.error',
+        request_id: cmd?.request_id || null,
+        error: clipText(detail || 'tab_open_failed'),
+        ts: Date.now()
+      });
+    }
+  ),
+  'js.exec.request': (command) => runBridgeHandler(
+    command,
+    'sendJsExec',
+    sendJsExec,
+    async (cmd, detail) => {
+      await postEventViaBridge({
+        type: 'js.exec.error',
+        request_id: cmd?.request_id || null,
+        tab_id: Number.isInteger(cmd?.tab_id) ? cmd.tab_id : null,
+        duration_ms: 0,
+        error_code: 'js_exec_failed',
+        error: clipText(detail || 'js_exec_failed'),
         ts: Date.now()
       });
     }
@@ -817,8 +1100,12 @@ async function handleBleCommand(command) {
   await handler(command);
 }
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || msg.type !== 'ble.command') return;
+  if (!isTrustedBleCommandSender(sender)) {
+    sendResponse({ ok: false, error: 'untrusted_sender' });
+    return true;
+  }
   debugLog('runtime ble.command', msg.command);
   handleBleCommand(msg.command)
     .then(() => sendResponse({ ok: true }))

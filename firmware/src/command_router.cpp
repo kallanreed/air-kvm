@@ -74,9 +74,15 @@ void CommandRouter::HandleCommand(const airkvm::Command& cmd) {
       break;
     case airkvm::CommandType::kDomSnapshotRequest:
     case airkvm::CommandType::kTabsListRequest:
+    case airkvm::CommandType::kTabOpenRequest:
+    case airkvm::CommandType::kJsExecRequest:
     case airkvm::CommandType::kScreenshotRequest:
     case airkvm::CommandType::kDomSnapshot:
     case airkvm::CommandType::kTabsList:
+    case airkvm::CommandType::kTabOpen:
+    case airkvm::CommandType::kTabOpenError:
+    case airkvm::CommandType::kJsExecResult:
+    case airkvm::CommandType::kJsExecError:
     case airkvm::CommandType::kTabsListError:
     case airkvm::CommandType::kDomSnapshotError:
     case airkvm::CommandType::kScreenshotMeta:

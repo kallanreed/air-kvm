@@ -42,3 +42,56 @@ test('validateAgentCommand accepts screenshot.request with tuning fields', () =>
   });
   assert.equal(result.ok, true);
 });
+
+test('validateAgentCommand accepts tab.open.request within bounds', () => {
+  const result = validateAgentCommand({
+    type: 'tab.open.request',
+    request_id: 'tab-1',
+    url: 'https://example.com',
+    active: false
+  });
+  assert.equal(result.ok, true);
+});
+
+test('validateAgentCommand rejects tab.open.request with invalid URL scheme', () => {
+  const result = validateAgentCommand({
+    type: 'tab.open.request',
+    request_id: 'tab-1',
+    url: 'ftp://example.com'
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'invalid_tab_open_request');
+});
+
+test('validateAgentCommand accepts js.exec.request within bounds', () => {
+  const result = validateAgentCommand({
+    type: 'js.exec.request',
+    request_id: 'js-1',
+    script: 'return document.title;',
+    tab_id: 5,
+    timeout_ms: 500,
+    max_result_chars: 300
+  });
+  assert.equal(result.ok, true);
+});
+
+test('validateAgentCommand rejects js.exec.request when script is too long', () => {
+  const result = validateAgentCommand({
+    type: 'js.exec.request',
+    request_id: 'js-1',
+    script: 'a'.repeat(601)
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'invalid_js_exec_request');
+});
+
+test('validateAgentCommand rejects js.exec.request when timeout is out of range', () => {
+  const result = validateAgentCommand({
+    type: 'js.exec.request',
+    request_id: 'js-2',
+    script: 'return 1;',
+    timeout_ms: 10
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'invalid_js_exec_request');
+});

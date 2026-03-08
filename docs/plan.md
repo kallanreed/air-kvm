@@ -4,6 +4,7 @@
 
 Maintain a reliable remote-control and browser-automation stack where:
 - MCP tools can request DOM, tab list, tab screenshots, and desktop screenshots.
+- MCP tools can open new browser tabs on the target extension machine.
 - Screenshot transfers are deterministic and recoverable under packet loss.
 - Firmware/extension/MCP protocol behavior is stable and documented.
 
@@ -21,7 +22,9 @@ Maintain a reliable remote-control and browser-automation stack where:
 - Structured tools exist and are live:
   - `airkvm_send`
   - `airkvm_list_tabs`
+  - `airkvm_open_tab`
   - `airkvm_dom_snapshot`
+  - `airkvm_exec_js_tab`
   - `airkvm_screenshot_tab`
   - `airkvm_screenshot_desktop`
 - UART parser supports mixed framed stream (`ctrl`, `log`, `bin`, and `bin_error`).
@@ -37,6 +40,8 @@ Maintain a reliable remote-control and browser-automation stack where:
 - Service worker handles:
   - `dom.snapshot.request`
   - `tabs.list.request`
+  - `tab.open.request`
+  - `js.exec.request` (single in-flight execution, timeout-bounded, `world: 'MAIN'`)
   - `screenshot.request` (tab + desktop)
   - transfer session controls (`transfer.resume`, `transfer.ack`, `transfer.done.ack`, `transfer.nack`, `transfer.cancel`, `transfer.reset`)
 - Screenshot path includes capture timeout/stage timeout guards and JPEG downscale/compression logic.

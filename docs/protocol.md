@@ -38,9 +38,23 @@ Examples:
 {"type":"fw.version.request"}
 {"type":"dom.snapshot.request","request_id":"req-1"}
 {"type":"tabs.list.request","request_id":"req-2"}
+{"type":"tab.open.request","request_id":"req-open-1","url":"https://example.com","active":true}
+{"type":"js.exec.request","request_id":"req-js-1","script":"return document.title;","timeout_ms":500,"max_result_chars":256}
 {"type":"screenshot.request","source":"tab","request_id":"req-3","encoding":"bin"}
 {"type":"screenshot.request","source":"desktop","request_id":"req-4","encoding":"bin","desktop_delay_ms":800}
 ```
+
+`tab.open.request` options (validated by extension + MCP tooling):
+- `request_id`: non-empty string (required)
+- `url`: string length `[1..2048]` and must start with `http://` or `https://` (required)
+- `active`: boolean (optional, defaults to `true`)
+
+`js.exec.request` options (validated by extension + MCP tooling):
+- `request_id`: string (required)
+- `script`: string length `[1..600]` (required)
+- `tab_id`: int (optional)
+- `timeout_ms`: int `[50..2000]` (optional)
+- `max_result_chars`: int `[64..700]` (optional)
 
 `screen​shot.request` options (validated by extension + MCP tooling):
 - `source`: `tab | desktop` (required)
@@ -64,6 +78,10 @@ Examples:
 {"type":"dom.snapshot.error","request_id":"req-1","error":"..."}
 {"type":"tabs.list","request_id":"req-2","tabs":[...]}
 {"type":"tabs.list.error","request_id":"req-2","error":"..."}
+{"type":"tab.open","request_id":"req-open-1","tab":{"id":101,"window_id":3,"active":true,"title":"Example","url":"https://example.com"},"ts":1741320000000}
+{"type":"tab.open.error","request_id":"req-open-1","error":"tabs_create_failed","ts":1741320000001}
+{"type":"js.exec.result","request_id":"req-js-1","tab_id":123,"duration_ms":11,"value_type":"string","value_json":"\"Example\"","truncated":false,"ts":1741320000000}
+{"type":"js.exec.error","request_id":"req-js-1","tab_id":123,"duration_ms":5,"error_code":"js_exec_runtime_error","error":"ReferenceError: foo is not defined","ts":1741320000001}
 {"type":"screenshot.error","request_id":"req-3","source":"tab","error":"..."}
 {"ok":true}
 {"ok":false,"error":"..."}
@@ -164,9 +182,53 @@ Extension bridge behavior:
 Tools exposed by MCP:
 - `airkvm_send`
 - `airkvm_list_tabs`
+- `airkvm_open_tab`
 - `airkvm_dom_snapshot`
+- `airkvm_exec_js_tab`
 - `airkvm_screenshot_tab`
 - `airkvm_screenshot_desktop`
+
+`airkvm_open_tab` sends:
+- `{ "type": "tab.open.request", "request_id", "url", "active?" }`
+
+`airkvm_open_tab` success result shape:
+- `type` (`tab.open`)
+- `request_id`
+- `tab`:
+  - `id`
+  - `window_id`
+  - `active`
+  - `title`
+  - `url`
+- `ts`
+
+`airkvm_open_tab` error result shape:
+- `type` (`tab.open.error`)
+- `request_id`
+- `error`
+- `ts`
+
+`airkvm_exec_js_tab` sends:
+- `{ "type": "js.exec.request", "request_id", "script", "tab_id?", "timeout_ms?", "max_result_chars?" }`
+
+`airkvm_exec_js_tab` success result shape:
+- `type` (`js.exec.result`)
+- `request_id`
+- `tab_id`
+- `duration_ms`
+- `value_type`
+- `value_json` (JSON string, bounded by `max_result_chars`)
+- `truncated`
+- `ts`
+
+`airkvm_exec_js_tab` error result shape:
+- `type` (`js.exec.error`)
+- `request_id`
+- `tab_id`
+- `duration_ms`
+- `error_code`
+- `error`
+- `ts`
 
 Screenshot tool result shape:
 - `request_id`

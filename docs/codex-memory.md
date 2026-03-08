@@ -15,7 +15,9 @@
 - Current MCP tools:
   - `airkvm_send`
   - `airkvm_list_tabs`
+  - `airkvm_open_tab`
   - `airkvm_dom_snapshot`
+  - `airkvm_exec_js_tab`
   - `airkvm_screenshot_tab`
   - `airkvm_screenshot_desktop`
 
@@ -45,8 +47,13 @@
 - Keep `codex-memory` updated when important behavior/process decisions change.
 
 ## Known Risks / Gaps
-- Dedicated service-worker unit tests are still missing (backlog item).
+- Service-worker tests are now present for `js.exec` and `tab.open`, but transfer-lifecycle fault coverage is still incomplete.
 - HID path exists in firmware code but is not the primary validated runtime path (`AIRKVM_ENABLE_HID=0` in default app build).
+
+## Recent Live Validation
+- `airkvm_open_tab` successfully opened `https://kylereedmsft.github.io/`.
+- `airkvm_exec_js_tab` was used to navigate to the bytebeat page and click Play (button state changed to Stop).
+- `airkvm_screenshot_tab` succeeded with `AIRKVM_SAVE_SCREENSHOTS=1` and saved a JPEG into `temp/`.
 
 ## Pointers
 - Protocol authority: `docs/protocol.md`

@@ -28,6 +28,45 @@ export function validateAgentCommand(msg) {
       return typeof msg.request_id === 'string'
         ? { ok: true }
         : { ok: false, error: 'invalid_dom_snapshot_request' };
+    case 'tab.open.request':
+      if (typeof msg.request_id !== 'string' || msg.request_id.length === 0) {
+        return { ok: false, error: 'invalid_tab_open_request' };
+      }
+      if (
+        typeof msg.url !== 'string' ||
+        msg.url.length === 0 ||
+        msg.url.length > 2048 ||
+        (!msg.url.startsWith('http://') && !msg.url.startsWith('https://'))
+      ) {
+        return { ok: false, error: 'invalid_tab_open_request' };
+      }
+      if (typeof msg.active !== 'undefined' && typeof msg.active !== 'boolean') {
+        return { ok: false, error: 'invalid_tab_open_request' };
+      }
+      return { ok: true };
+    case 'js.exec.request':
+      if (typeof msg.request_id !== 'string') {
+        return { ok: false, error: 'invalid_js_exec_request' };
+      }
+      if (typeof msg.script !== 'string' || msg.script.length < 1 || msg.script.length > 600) {
+        return { ok: false, error: 'invalid_js_exec_request' };
+      }
+      if (typeof msg.tab_id !== 'undefined' && !Number.isInteger(msg.tab_id)) {
+        return { ok: false, error: 'invalid_js_exec_request' };
+      }
+      if (
+        typeof msg.timeout_ms !== 'undefined' &&
+        (!Number.isInteger(msg.timeout_ms) || msg.timeout_ms < 50 || msg.timeout_ms > 2000)
+      ) {
+        return { ok: false, error: 'invalid_js_exec_request' };
+      }
+      if (
+        typeof msg.max_result_chars !== 'undefined' &&
+        (!Number.isInteger(msg.max_result_chars) || msg.max_result_chars < 64 || msg.max_result_chars > 700)
+      ) {
+        return { ok: false, error: 'invalid_js_exec_request' };
+      }
+      return { ok: true };
     case 'screenshot.request':
       if (!((msg.source === 'tab' || msg.source === 'desktop') && typeof msg.request_id === 'string')) {
         return { ok: false, error: 'invalid_screenshot_request' };
