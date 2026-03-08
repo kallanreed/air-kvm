@@ -34,6 +34,7 @@ let healthState = {
   suspendedUntil: 0,
   lastActivityAt: 0
 };
+let lastSwInstanceId = null;
 
 function appendLog(line) {
   if (!logEl) return;
@@ -366,6 +367,26 @@ notifySw('bridge_loaded');
 debugLog('bridge_loaded');
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg?.type === 'ble.sw.alive' && msg.target === 'ble-page') {
+    const instanceId = msg.instance_id || null;
+    if (instanceId && lastSwInstanceId && instanceId !== lastSwInstanceId) {
+      debugLog('sw instance changed', {
+        previous: lastSwInstanceId,
+        current: instanceId
+      });
+    }
+    if (instanceId) {
+      lastSwInstanceId = instanceId;
+    }
+    debugLog('sw alive', {
+      instance_id: instanceId,
+      active_transfer_ids: Array.isArray(msg.active_transfer_ids) ? msg.active_transfer_ids : [],
+      ts: msg.ts || null
+    });
+    markBridgeActivity('sw_alive');
+    sendResponse({ ok: true });
+    return true;
+  }
   if (msg?.type === 'desktop.capture.request' && msg.target === 'ble-page') {
     debugLog('desktop.capture.request');
     captureDesktopDataUrl()

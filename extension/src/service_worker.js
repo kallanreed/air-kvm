@@ -4,14 +4,58 @@ const kDebug = true;
 const kScreenshotCaptureTimeoutMs = 25000;
 const kScreenshotStageTimeoutMs = 10000;
 const kTransferTtlMs = 2 * 60 * 1000;
+const kSwHeartbeatIntervalMs = 5000;
+const kSwBreadcrumbStorageKey = 'airkvm_sw_breadcrumb';
 let lastAutomationTabId = null;
 let bridgeTraceSeq = 0;
 let screenshotInFlight = false;
 const screenshotTransfers = new Map();
+const kSwInstanceId = `sw_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
 
 function debugLog(...args) {
   if (!kDebug) return;
-  console.log('[airkvm-sw]', ...args);
+  console.log('[airkvm-sw]', `[${kSwInstanceId}]`, ...args);
+}
+
+function activeTransferIds() {
+  return Array.from(screenshotTransfers.keys());
+}
+
+async function writeSwBreadcrumb(event, detail = null) {
+  if (!chrome?.storage?.session?.set) return;
+  try {
+    await chrome.storage.session.set({
+      [kSwBreadcrumbStorageKey]: {
+        instance_id: kSwInstanceId,
+        ts: Date.now(),
+        event,
+        detail,
+        active_transfer_ids: activeTransferIds()
+      }
+    });
+  } catch {
+    // Non-fatal diagnostics.
+  }
+}
+
+async function readSwBreadcrumb() {
+  if (!chrome?.storage?.session?.get) return null;
+  try {
+    const got = await chrome.storage.session.get(kSwBreadcrumbStorageKey);
+    return got?.[kSwBreadcrumbStorageKey] || null;
+  } catch {
+    return null;
+  }
+}
+
+function emitSwAliveHeartbeat() {
+  chrome.runtime.sendMessage({
+    type: 'ble.sw.alive',
+    target: 'ble-page',
+    instance_id: kSwInstanceId,
+    ts: Date.now(),
+    active_transfer_ids: activeTransferIds()
+  }).catch(() => {});
 }
 
 function setBadge(text, color) {
@@ -358,6 +402,16 @@ async function sendScreenshot(command) {
       highestAckSeq: -1
     };
     screenshotTransfers.set(transferId, session);
+    debugLog('transfer session created', {
+      requestId,
+      transferId,
+      totalChunks: chunks.length
+    });
+    void writeSwBreadcrumb('transfer_created', {
+      request_id: requestId,
+      transfer_id: transferId,
+      total_chunks: chunks.length
+    });
 
     await postEventViaBridge({
       type: 'transfer.meta',
@@ -413,7 +467,18 @@ async function handleTransferResume(command) {
   const transferId = command?.transfer_id;
   const session = transferId ? screenshotTransfers.get(transferId) : null;
   if (!session) {
-    await sendTransferError(command, 'no_such_transfer');
+    const breadcrumb = await readSwBreadcrumb();
+    const detail = {
+      instance_id: kSwInstanceId,
+      active_transfer_ids: activeTransferIds(),
+      last_breadcrumb: breadcrumb
+    };
+    debugLog('transfer resume missing session', {
+      requestId: command?.request_id || null,
+      transferId: transferId || null,
+      detail
+    });
+    await sendTransferError(command, 'no_such_transfer', detail);
     return;
   }
   if (command?.request_id && session.requestId !== command.request_id) {
@@ -424,6 +489,17 @@ async function handleTransferResume(command) {
     ? Math.max(0, command.from_seq)
     : Math.max(0, session.highestAckSeq + 1);
   session.updatedAt = Date.now();
+  debugLog('transfer resume start', {
+    requestId: session.requestId,
+    transferId: session.transferId,
+    fromSeq,
+    totalChunks: session.chunks.length
+  });
+  void writeSwBreadcrumb('transfer_resume', {
+    request_id: session.requestId,
+    transfer_id: session.transferId,
+    from_seq: fromSeq
+  });
   for (let seq = fromSeq; seq < session.chunks.length; seq += 1) {
     const chunk = session.chunks[seq];
     await postEventViaBridge({
@@ -456,6 +532,11 @@ async function handleTransferAck(command) {
     session.highestAckSeq = Math.max(session.highestAckSeq, command.highest_contiguous_seq);
   }
   session.updatedAt = Date.now();
+  void writeSwBreadcrumb('transfer_ack', {
+    request_id: session.requestId,
+    transfer_id: session.transferId,
+    highest_contiguous_seq: session.highestAckSeq
+  });
 }
 
 async function handleTransferCancel(command) {
@@ -465,6 +546,7 @@ async function handleTransferCancel(command) {
     return;
   }
   screenshotTransfers.delete(transferId);
+  void writeSwBreadcrumb('transfer_cancel', { transfer_id: transferId });
   await postEventViaBridge({
     type: 'transfer.cancel.ok',
     request_id: command?.request_id || null,
@@ -475,6 +557,9 @@ async function handleTransferCancel(command) {
 
 async function handleTransferReset(command) {
   screenshotTransfers.clear();
+  void writeSwBreadcrumb('transfer_reset', {
+    request_id: command?.request_id || null
+  });
   await postEventViaBridge({
     type: 'transfer.reset.ok',
     request_id: command?.request_id || null,
@@ -634,6 +719,43 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     .catch((err) => sendResponse({ ok: false, error: String(err?.message || err) }));
   return true;
 });
+
+chrome.runtime.onInstalled?.addListener((details) => {
+  debugLog('lifecycle onInstalled', details || null);
+  void writeSwBreadcrumb('lifecycle_onInstalled', details || null);
+});
+
+chrome.runtime.onStartup?.addListener(() => {
+  debugLog('lifecycle onStartup');
+  void writeSwBreadcrumb('lifecycle_onStartup');
+});
+
+if (typeof self?.addEventListener === 'function') {
+  self.addEventListener('activate', () => {
+    debugLog('lifecycle activate');
+    void writeSwBreadcrumb('lifecycle_activate');
+  });
+}
+
+if (chrome.runtime?.onSuspend?.addListener) {
+  chrome.runtime.onSuspend.addListener(() => {
+    debugLog('lifecycle onSuspend');
+    void writeSwBreadcrumb('lifecycle_onSuspend');
+  });
+}
+
+if (chrome.runtime?.onSuspendCanceled?.addListener) {
+  chrome.runtime.onSuspendCanceled.addListener(() => {
+    debugLog('lifecycle onSuspendCanceled');
+    void writeSwBreadcrumb('lifecycle_onSuspendCanceled');
+  });
+}
+
+debugLog('boot', { instance_id: kSwInstanceId });
+void writeSwBreadcrumb('boot', { instance_id: kSwInstanceId });
+setInterval(() => {
+  emitSwAliveHeartbeat();
+}, kSwHeartbeatIntervalMs);
 
 chrome.action.onClicked.addListener(async (tab) => {
   debugLog('action clicked', { tabId: tab?.id ?? null });

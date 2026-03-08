@@ -192,3 +192,14 @@
     - service-worker `ble.post` requests routed through bridge page.
   - Health watchdog now skips ping/disconnect progression while recent activity is present (`< 2 * ping interval`).
   - Goal: prevent false `health:timeout` disconnects during active screenshot/transfer data flow.
+- SW lifecycle churn observability added (March 7, 2026, late night):
+  - `service_worker.js` now emits stable `instance_id` in all logs and periodic `ble.sw.alive` heartbeats to bridge page.
+  - Added SW lifecycle diagnostics:
+    - boot log + breadcrumb
+    - `onInstalled`, `onStartup`, `activate`, and (if available) `onSuspend`/`onSuspendCanceled` logs.
+  - Added transfer breadcrumbs in `chrome.storage.session` (`airkvm_sw_breadcrumb`) for transfer create/resume/ack/cancel/reset paths.
+  - `transfer.resume` miss now returns `transfer.error` with detail containing:
+    - current `instance_id`
+    - active in-memory transfer IDs
+    - last persisted breadcrumb snapshot.
+  - Bridge page now logs `ble.sw.alive` and detects SW instance changes.
