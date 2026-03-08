@@ -1,12 +1,14 @@
+import { SCREENSHOT_CONTRACT } from './screenshot_contract.js';
+
 export const kDefaultScreenshotConfig = {
-  maxWidth: 960,
-  maxHeight: 540,
-  jpegQuality: 0.55,
-  maxBase64Chars: 90000,
-  desktopDelayMs: 350,
-  maxAttempts: 4,
-  downscaleFactor: 0.8,
-  minJpegQuality: 0.45
+  maxWidth: SCREENSHOT_CONTRACT.width.default,
+  maxHeight: SCREENSHOT_CONTRACT.height.default,
+  jpegQuality: SCREENSHOT_CONTRACT.quality.default,
+  maxBase64Chars: SCREENSHOT_CONTRACT.maxChars.default,
+  desktopDelayMs: SCREENSHOT_CONTRACT.desktopDelayMs.default,
+  maxAttempts: SCREENSHOT_CONTRACT.maxAttempts,
+  downscaleFactor: SCREENSHOT_CONTRACT.downscaleFactor,
+  minJpegQuality: SCREENSHOT_CONTRACT.quality.minEncode
 };
 
 function clampInt(value, min, max, fallback) {
@@ -21,12 +23,17 @@ function clampNumber(value, min, max, fallback) {
 
 export function resolveScreenshotConfig(command, base = kDefaultScreenshotConfig) {
   return {
-    maxWidth: clampInt(command?.max_width, 160, 1920, base.maxWidth),
-    maxHeight: clampInt(command?.max_height, 120, 1080, base.maxHeight),
-    jpegQuality: clampNumber(command?.quality, 0.3, 0.9, base.jpegQuality),
-    maxBase64Chars: clampInt(command?.max_chars, 20000, 200000, base.maxBase64Chars),
-    desktopDelayMs: clampInt(command?.desktop_delay_ms, 0, 5000, base.desktopDelayMs),
-    encoding: 'bin',
+    maxWidth: clampInt(command?.max_width, SCREENSHOT_CONTRACT.width.min, SCREENSHOT_CONTRACT.width.max, base.maxWidth),
+    maxHeight: clampInt(command?.max_height, SCREENSHOT_CONTRACT.height.min, SCREENSHOT_CONTRACT.height.max, base.maxHeight),
+    jpegQuality: clampNumber(command?.quality, SCREENSHOT_CONTRACT.quality.min, SCREENSHOT_CONTRACT.quality.max, base.jpegQuality),
+    maxBase64Chars: clampInt(command?.max_chars, SCREENSHOT_CONTRACT.maxChars.min, SCREENSHOT_CONTRACT.maxChars.max, base.maxBase64Chars),
+    desktopDelayMs: clampInt(
+      command?.desktop_delay_ms,
+      SCREENSHOT_CONTRACT.desktopDelayMs.min,
+      SCREENSHOT_CONTRACT.desktopDelayMs.max,
+      base.desktopDelayMs
+    ),
+    encoding: SCREENSHOT_CONTRACT.encoding,
     maxAttempts: base.maxAttempts,
     downscaleFactor: base.downscaleFactor,
     minJpegQuality: base.minJpegQuality

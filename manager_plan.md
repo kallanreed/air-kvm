@@ -90,3 +90,24 @@ Stabilize screenshot transfer reliability end-to-end by upgrading from fire-and-
    - `cd extension && node --test`
    - `cd mcp && node --test`
 6. [ ] Live validation with repeated `airkvm_screenshot_tab` binary captures and verify timeout regression is gone.
+
+## Backlog - Option 3 (Major Consolidation Pass)
+Status: Backlog (not started)
+
+1. [ ] Split `extension/src/service_worker.js` into focused modules:
+   - `command_dispatch.js`
+   - `capture.js`
+   - `transfer_session.js`
+   - `bridge_client.js`
+   - `tab_targeting.js`
+2. [ ] Move command handling to declarative dispatch map + shared error wrapper.
+3. [ ] Evaluate removal of legacy protocol branches:
+   - MCP `legacy_ctrl` JSON fallback in `mcp/src/uart.js`
+   - firmware parse branches for `screenshot.meta` / `screenshot.chunk`
+4. [ ] Add guardrail telemetry/log assertions before removing legacy branches.
+5. [ ] Add/expand integration tests for module boundaries and transfer lifecycle.
+7. [ ] Add dedicated `extension` service worker tests:
+   - command dispatch map behavior
+   - transfer session lifecycle (`meta`/chunk/ack/nack/resume/done.ack/reset/cancel)
+   - bridge message routing and error-path handling
+6. [ ] Run live e2e validation matrix (DOM, tabs, tab screenshot, desktop screenshot, reconnect, resume).

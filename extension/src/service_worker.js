@@ -717,106 +717,104 @@ async function sendTabsList(command) {
   });
 }
 
+async function runBridgeHandler(command, label, handler, onError) {
+  try {
+    await handler(command);
+  } catch (err) {
+    const detail = String(err?.message || err);
+    debugLog(`${label} error`, detail);
+    await onError(command, detail);
+  }
+}
+
+const kBleCommandHandlers = {
+  'dom.snapshot.request': (command) => runBridgeHandler(
+    command,
+    'sendDomSnapshot',
+    sendDomSnapshot,
+    async (cmd, detail) => {
+      await postEventViaBridge({
+        type: 'dom.snapshot.error',
+        request_id: cmd.request_id || null,
+        error: detail,
+        ts: Date.now()
+      });
+    }
+  ),
+  'screenshot.request': (command) => runBridgeHandler(
+    command,
+    'sendScreenshot',
+    sendScreenshot,
+    async (cmd, detail) => {
+      await postEventViaBridge({
+        type: 'screenshot.error',
+        request_id: cmd.request_id || null,
+        source: cmd.source || 'tab',
+        error: detail,
+        ts: Date.now()
+      });
+    }
+  ),
+  'tabs.list.request': (command) => runBridgeHandler(
+    command,
+    'sendTabsList',
+    sendTabsList,
+    async (cmd, detail) => {
+      await postEventViaBridge({
+        type: 'tabs.list.error',
+        request_id: cmd.request_id || null,
+        error: detail,
+        ts: Date.now()
+      });
+    }
+  ),
+  'transfer.resume': (command) => runBridgeHandler(
+    command,
+    'handleTransferResume',
+    handleTransferResume,
+    async (cmd, detail) => sendTransferError(cmd, 'transfer_resume_failed', detail)
+  ),
+  'transfer.ack': (command) => runBridgeHandler(
+    command,
+    'handleTransferAck',
+    handleTransferAck,
+    async (cmd, detail) => sendTransferError(cmd, 'transfer_ack_failed', detail)
+  ),
+  'transfer.done.ack': (command) => runBridgeHandler(
+    command,
+    'handleTransferDoneAck',
+    handleTransferDoneAck,
+    async (cmd, detail) => sendTransferError(cmd, 'transfer_done_ack_failed', detail)
+  ),
+  'transfer.nack': (command) => runBridgeHandler(
+    command,
+    'handleTransferNack',
+    handleTransferNack,
+    async (cmd, detail) => sendTransferError(cmd, 'transfer_nack_failed', detail)
+  ),
+  'transfer.cancel': (command) => runBridgeHandler(
+    command,
+    'handleTransferCancel',
+    handleTransferCancel,
+    async (cmd, detail) => sendTransferError(cmd, 'transfer_cancel_failed', detail)
+  ),
+  'transfer.reset': (command) => runBridgeHandler(
+    command,
+    'handleTransferReset',
+    handleTransferReset,
+    async (cmd, detail) => sendTransferError(cmd, 'transfer_reset_failed', detail)
+  )
+};
+
 async function handleBleCommand(command) {
   debugLog('handleBleCommand', command);
   if (!command || typeof command.type !== 'string') {
     debugLog('handleBleCommand ignore non-command payload', command);
     return;
   }
-  if (command.type === 'dom.snapshot.request') {
-    try {
-      await sendDomSnapshot(command);
-    } catch (err) {
-      debugLog('sendDomSnapshot error', String(err?.message || err));
-      await postEventViaBridge({
-        type: 'dom.snapshot.error',
-        request_id: command.request_id || null,
-        error: String(err?.message || err),
-        ts: Date.now()
-      });
-    }
-    return;
-  }
-  if (command.type === 'screenshot.request') {
-    try {
-      await sendScreenshot(command);
-    } catch (err) {
-      debugLog('sendScreenshot error', String(err?.message || err));
-      await postEventViaBridge({
-        type: 'screenshot.error',
-        request_id: command.request_id || null,
-        source: command.source || 'tab',
-        error: String(err?.message || err),
-        ts: Date.now()
-      });
-    }
-  }
-  if (command.type === 'tabs.list.request') {
-    try {
-      await sendTabsList(command);
-    } catch (err) {
-      debugLog('sendTabsList error', String(err?.message || err));
-      await postEventViaBridge({
-        type: 'tabs.list.error',
-        request_id: command.request_id || null,
-        error: String(err?.message || err),
-        ts: Date.now()
-      });
-    }
-  }
-  if (command.type === 'transfer.resume') {
-    try {
-      await handleTransferResume(command);
-    } catch (err) {
-      debugLog('handleTransferResume error', String(err?.message || err));
-      await sendTransferError(command, 'transfer_resume_failed', String(err?.message || err));
-    }
-    return;
-  }
-  if (command.type === 'transfer.ack') {
-    try {
-      await handleTransferAck(command);
-    } catch (err) {
-      debugLog('handleTransferAck error', String(err?.message || err));
-      await sendTransferError(command, 'transfer_ack_failed', String(err?.message || err));
-    }
-    return;
-  }
-  if (command.type === 'transfer.done.ack') {
-    try {
-      await handleTransferDoneAck(command);
-    } catch (err) {
-      debugLog('handleTransferDoneAck error', String(err?.message || err));
-      await sendTransferError(command, 'transfer_done_ack_failed', String(err?.message || err));
-    }
-    return;
-  }
-  if (command.type === 'transfer.nack') {
-    try {
-      await handleTransferNack(command);
-    } catch (err) {
-      debugLog('handleTransferNack error', String(err?.message || err));
-      await sendTransferError(command, 'transfer_nack_failed', String(err?.message || err));
-    }
-    return;
-  }
-  if (command.type === 'transfer.cancel') {
-    try {
-      await handleTransferCancel(command);
-    } catch (err) {
-      debugLog('handleTransferCancel error', String(err?.message || err));
-      await sendTransferError(command, 'transfer_cancel_failed', String(err?.message || err));
-    }
-    return;
-  }
-  if (command.type === 'transfer.reset') {
-    try {
-      await handleTransferReset(command);
-    } catch (err) {
-      debugLog('handleTransferReset error', String(err?.message || err));
-      await sendTransferError(command, 'transfer_reset_failed', String(err?.message || err));
-    }
-  }
+  const handler = kBleCommandHandlers[command.type];
+  if (!handler) return;
+  await handler(command);
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {

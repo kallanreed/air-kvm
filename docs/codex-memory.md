@@ -390,3 +390,10 @@
 - 2026-03-07: Bridge command log policy: always-visible lifecycle commands, but transport ACKs (plain {ok:true}) and transfer.ack are verbose-only; summarize plain ok frames as type=ack.
 - 2026-03-07: Bridge default log now suppresses SW->BLE command entries; enable Verbose to see outbound command traffic.
 - 2026-03-08: Updated AGENTS/docs to document MCP harness usage (scripts/mcp-tool-call.mjs), current 5 MCP tools, and framed UART protocol reality.
+- 2026-03-08: Option-2 cleanup pass started.
+  - Added mirrored screenshot contract constants in `extension/src/screenshot_contract.js` and `mcp/src/screenshot_contract.js`.
+  - Wired MCP tool schema bounds and extension screenshot config clamps to contract constants.
+  - Added parity test `mcp/test/screenshot_contract_parity.test.js` to prevent contract drift.
+  - Refactored extension service-worker BLE command handling to dispatch-map + shared error wrapper (`runBridgeHandler`) without changing command surface.
+  - Consolidated bridge-page log rendering helpers (`renderLogParts`, `appendStampedLog`) to remove formatting duplication.
+  - Added Option-3 backlog item in `manager_plan.md` for explicit service-worker tests.

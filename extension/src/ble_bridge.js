@@ -96,31 +96,32 @@ function appendLog(line) {
   }
 }
 
+function renderLogParts(parts) {
+  return parts.map((part) => {
+    if (typeof part === 'string') return part;
+    try {
+      return JSON.stringify(part);
+    } catch {
+      return String(part);
+    }
+  }).join(' ');
+}
+
+function appendStampedLog(prefix, parts) {
+  const rendered = renderLogParts(parts);
+  const line = prefix ? `${prefix} ${rendered}` : rendered;
+  appendLog(`${new Date().toISOString()} ${line}`);
+}
+
 function debugLog(...args) {
   if (!verboseLoggingEnabled) return;
   if (!kDebug) return;
   console.log('[airkvm-bridge]', ...args);
-  const rendered = args.map((part) => {
-    if (typeof part === 'string') return part;
-    try {
-      return JSON.stringify(part);
-    } catch {
-      return String(part);
-    }
-  }).join(' ');
-  appendLog(`${new Date().toISOString()} ${rendered}`);
+  appendStampedLog('', args);
 }
 
 function infoLog(...args) {
-  const rendered = args.map((part) => {
-    if (typeof part === 'string') return part;
-    try {
-      return JSON.stringify(part);
-    } catch {
-      return String(part);
-    }
-  }).join(' ');
-  appendLog(`${new Date().toISOString()} ${rendered}`);
+  appendStampedLog('', args);
 }
 
 function summarizeCommand(frame) {
@@ -158,15 +159,7 @@ function commandLog(direction, frame) {
 
 setBleDebugLogger((...args) => {
   if (!verboseLoggingEnabled) return;
-  const rendered = args.map((part) => {
-    if (typeof part === 'string') return part;
-    try {
-      return JSON.stringify(part);
-    } catch {
-      return String(part);
-    }
-  }).join(' ');
-  appendLog(`${new Date().toISOString()} [ble] ${rendered}`);
+  appendStampedLog('[ble]', args);
 });
 
 function setStatus(text) {

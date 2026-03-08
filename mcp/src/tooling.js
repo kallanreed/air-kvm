@@ -1,3 +1,5 @@
+import { SCREENSHOT_CONTRACT } from './screenshot_contract.js';
+
 export const TOOL_DEFINITIONS = [
   {
     name: 'airkvm_send',
@@ -45,12 +47,12 @@ export const TOOL_DEFINITIONS = [
       type: 'object',
       properties: {
         request_id: { type: 'string' },
-        max_width: { type: 'integer', minimum: 160, maximum: 1920 },
-        max_height: { type: 'integer', minimum: 120, maximum: 1080 },
-        quality: { type: 'number', minimum: 0.3, maximum: 0.9 },
-        max_chars: { type: 'integer', minimum: 20000, maximum: 200000 },
+        max_width: { type: 'integer', minimum: SCREENSHOT_CONTRACT.width.min, maximum: SCREENSHOT_CONTRACT.width.max },
+        max_height: { type: 'integer', minimum: SCREENSHOT_CONTRACT.height.min, maximum: SCREENSHOT_CONTRACT.height.max },
+        quality: { type: 'number', minimum: SCREENSHOT_CONTRACT.quality.min, maximum: SCREENSHOT_CONTRACT.quality.max },
+        max_chars: { type: 'integer', minimum: SCREENSHOT_CONTRACT.maxChars.min, maximum: SCREENSHOT_CONTRACT.maxChars.max },
         tab_id: { type: 'integer' },
-        encoding: { type: 'string', enum: ['bin'] }
+        encoding: { type: 'string', enum: [SCREENSHOT_CONTRACT.encoding] }
       },
       required: []
     }
@@ -62,12 +64,16 @@ export const TOOL_DEFINITIONS = [
       type: 'object',
       properties: {
         request_id: { type: 'string' },
-        max_width: { type: 'integer', minimum: 160, maximum: 1920 },
-        max_height: { type: 'integer', minimum: 120, maximum: 1080 },
-        quality: { type: 'number', minimum: 0.3, maximum: 0.9 },
-        max_chars: { type: 'integer', minimum: 20000, maximum: 200000 },
-        desktop_delay_ms: { type: 'integer', minimum: 0, maximum: 5000 },
-        encoding: { type: 'string', enum: ['bin'] }
+        max_width: { type: 'integer', minimum: SCREENSHOT_CONTRACT.width.min, maximum: SCREENSHOT_CONTRACT.width.max },
+        max_height: { type: 'integer', minimum: SCREENSHOT_CONTRACT.height.min, maximum: SCREENSHOT_CONTRACT.height.max },
+        quality: { type: 'number', minimum: SCREENSHOT_CONTRACT.quality.min, maximum: SCREENSHOT_CONTRACT.quality.max },
+        max_chars: { type: 'integer', minimum: SCREENSHOT_CONTRACT.maxChars.min, maximum: SCREENSHOT_CONTRACT.maxChars.max },
+        desktop_delay_ms: {
+          type: 'integer',
+          minimum: SCREENSHOT_CONTRACT.desktopDelayMs.min,
+          maximum: SCREENSHOT_CONTRACT.desktopDelayMs.max
+        },
+        encoding: { type: 'string', enum: [SCREENSHOT_CONTRACT.encoding] }
       },
       required: []
     }
@@ -123,7 +129,7 @@ export function buildCommandForTool(name, args = {}) {
   if (typeof args?.quality === 'number') screenshotOptions.quality = args.quality;
   if (Number.isInteger(args?.max_chars)) screenshotOptions.max_chars = args.max_chars;
   if (Number.isInteger(args?.tab_id)) screenshotOptions.tab_id = args.tab_id;
-  screenshotOptions.encoding = 'bin';
+  screenshotOptions.encoding = SCREENSHOT_CONTRACT.encoding;
 
   if (name === 'airkvm_list_tabs') {
     return { type: 'tabs.list.request', request_id: requestId };
@@ -205,7 +211,7 @@ export function createResponseCollector(name, command) {
 
   if (name === 'airkvm_screenshot_tab' || name === 'airkvm_screenshot_desktop') {
     const requestId = command.request_id;
-    const maxChars = Number.isInteger(command.max_chars) ? command.max_chars : 200000;
+    const maxChars = Number.isInteger(command.max_chars) ? command.max_chars : SCREENSHOT_CONTRACT.maxChars.max;
     const chunksBySeq = new Map();
     let meta = null;
     let receivedBytes = 0;
