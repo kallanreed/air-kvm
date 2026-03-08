@@ -219,3 +219,14 @@
   - Validation:
     - `cd firmware && pio test -e native` pass
     - `cd firmware && pio run -e esp32dev` pass
+- Investigator regression finding (March 8, 2026, early):
+  - New failure after flashing serialized-TX firmware:
+    - BLE connect succeeds, first `state.request` write fails (`GATT operation failed for unknown reason`), then immediate `gattserverdisconnected`.
+    - Handshake retries fail with no snapshot payload.
+  - Strong evidence points to BLE notify from dedicated FreeRTOS TX task causing disconnects on this stack/context.
+  - Mitigation applied:
+    - Keep UART queue/task serialization.
+    - Move BLE `setValue+notify` back to immediate `EmitControl` path (same execution context as command handling).
+  - Local validation after mitigation:
+    - `cd firmware && pio test -e native` pass
+    - `cd firmware && pio run -e esp32dev` pass

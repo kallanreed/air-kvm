@@ -19,12 +19,8 @@ class TransportMux {
 
  private:
   static constexpr size_t kMaxUartLineLen = 1024;
-  static constexpr size_t kMaxBlePayloadLen = 768;
   struct TxFrame {
     char uart_line[kMaxUartLineLen];
-    size_t ble_len;
-    uint8_t ble_payload[kMaxBlePayloadLen];
-    bool has_ble;
   };
 
   void EnqueueFrame(const TxFrame& frame);

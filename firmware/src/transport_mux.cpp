@@ -50,8 +50,6 @@ void TransportMux::EmitLog(const String& message) {
       kLogPrefix,
       escaped.c_str(),
       kLogSuffix);
-  frame.has_ble = false;
-  frame.ble_len = 0;
   EnqueueFrame(frame);
 }
 
@@ -64,18 +62,15 @@ void TransportMux::EmitControl(const char* payload) {
       kCtrlPrefix,
       payload,
       kCtrlSuffix);
-
-  const size_t payload_len = std::strlen(payload);
-  if (payload_len + 1 <= sizeof(frame.ble_payload)) {
-    std::memcpy(frame.ble_payload, payload, payload_len);
-    frame.ble_payload[payload_len] = '\n';
-    frame.ble_len = payload_len + 1;
-    frame.has_ble = true;
-  } else {
-    frame.has_ble = false;
-    frame.ble_len = 0;
-  }
   EnqueueFrame(frame);
+
+  if (tx_char_ != nullptr) {
+    std::string ble_payload(payload);
+    ble_payload.push_back('\n');
+    tx_char_->setValue(
+        reinterpret_cast<const uint8_t*>(ble_payload.data()), ble_payload.size());
+    tx_char_->notify();
+  }
 }
 
 void TransportMux::EmitState(const DeviceState& state) {
@@ -99,10 +94,6 @@ void TransportMux::EnqueueFrame(const TxFrame& frame) {
 
 void TransportMux::EmitFrameDirect(const TxFrame& frame) {
   Serial.println(frame.uart_line);
-  if (frame.has_ble && tx_char_ != nullptr && frame.ble_len > 0) {
-    tx_char_->setValue(frame.ble_payload, frame.ble_len);
-    tx_char_->notify();
-  }
 }
 
 String TransportMux::JsonEscape(const String& in) {
