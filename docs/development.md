@@ -4,16 +4,15 @@
 
 - Node.js 20+
 - PlatformIO CLI (`pio`)
-- ESP32 board support installed in PlatformIO
+- ESP32 platform installed in PlatformIO
 
-## Deployment note
+## Runtime Topology
 
-- Controller/host machine runs MCP and connects to firmware over UART.
-- Target machine runs only the browser extension.
-- Extension does not connect to MCP.
-- Extension external transport is BLE only.
+- Host/controller runs MCP and connects to firmware via UART.
+- Target machine runs extension only.
+- Extension talks to firmware via BLE only.
 
-## Build and test
+## Build and Test
 
 From repo root:
 
@@ -22,43 +21,70 @@ From repo root:
 ```
 
 This runs:
+1. `cd mcp && node --test`
+2. `cd extension && node --test`
+3. `cd firmware && pio test -e native`
+4. `cd firmware && pio run -e esp32dev`
 
-1. `mcp`: `node --test`
-2. `extension`: `node --test`
-3. `firmware`: `pio test -e native`
-4. `firmware`: `pio run -e esp32dev`
+## Manual Commands
 
-## Manual runs
-
-MCP server:
+Run MCP server:
 
 ```bash
 cd mcp
 AIRKVM_SERIAL_PORT=/dev/cu.usbserial-0001 node src/index.js
 ```
 
-Optional MCP env vars:
-- `AIRKVM_SERIAL_BAUD` (default `115200`)
+Run MCP tool harness (single tool call):
 
-Firmware serial monitor:
+```bash
+node scripts/mcp-tool-call.mjs airkvm_dom_snapshot '{"request_id":"manual-1"}'
+node scripts/mcp-tool-call.mjs airkvm_screenshot_tab '{"request_id":"shot-1","max_width":1280,"max_height":720,"quality":0.6}'
+```
+
+Optional screenshot autosave (for debugging):
+
+```bash
+AIRKVM_SAVE_SCREENSHOTS=1 node scripts/mcp-tool-call.mjs airkvm_screenshot_desktop '{"request_id":"shot-desktop-1","desktop_delay_ms":800}'
+```
+
+Run integrated smoke script:
+
+```bash
+AIRKVM_SERIAL_PORT=/dev/cu.usbserial-0001 node scripts/poc-smoke.mjs
+```
+
+Firmware monitor:
 
 ```bash
 cd firmware
 pio device monitor
 ```
 
-BLE manual test reference:
-- See `docs/protocol.md` section **BLE Manual Testing** for characteristic UUIDs, valid payloads, and expected responses.
+## Environment Variables
 
-Integrated local smoke test (MCP + firmware command):
+MCP runtime:
+- `AIRKVM_SERIAL_PORT` (default `/dev/cu.usbserial-0001`)
+- `AIRKVM_SERIAL_BAUD` (default `115200`)
+- `AIRKVM_SERIAL_TIMEOUT_MS` (default `3000`)
+- `AIRKVM_UART_DEBUG=1` (enable UART debug logs to stderr)
 
-```bash
-AIRKVM_SERIAL_PORT=/dev/cu.usbserial-0001 node scripts/poc-smoke.mjs
-```
+Tool harness:
+- `AIRKVM_TOOL_TIMEOUT_MS` (default `120000`)
+- `AIRKVM_SAVE_SCREENSHOTS=1` (optional screenshot file save to `temp/`)
 
-## Next implementation milestones
+Firmware build/runtime:
+- `AIRKVM_ENABLE_HID` compile-time switch (default `0` in current app config)
 
-1. Implement real firmware HID injection using NimBLE HID primitives.
-2. Add extension screenshot request/response path.
-3. Add integration test harness with fake serial transport.
-4. Persist extension event history and expose richer query tools.
+## BLE Manual Reference
+
+See `docs/protocol.md`:
+- BLE service/characteristic UUIDs
+- control + binary framing behavior
+- screenshot transfer flow (`transfer.*`)
+
+## Current Focus Areas
+
+1. Harden long-running screenshot reliability and observability.
+2. Keep docs/protocol synchronized with code after transport changes.
+3. Revisit HID-enabled firmware path when input-injection milestones are prioritized.

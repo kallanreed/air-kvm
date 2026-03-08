@@ -1,107 +1,69 @@
-# AirKVM Plan And Status (March 7, 2026)
+# AirKVM Plan And Status (March 8, 2026)
 
 ## Goal
-Ship a working remote-control stack where:
-- ESP32 appears as BLE HID (HOGP) to macOS target machine.
-- Browser extension runs on target machine and exchanges automation context over BLE.
-- MCP runs on controller/host machine and drives device commands over UART.
-- DOM snapshot + tab screenshot + desktop screenshot are retrievable reliably.
 
-## What Is Done
+Maintain a reliable remote-control and browser-automation stack where:
+- MCP tools can request DOM, tab list, tab screenshots, and desktop screenshots.
+- Screenshot transfers are deterministic and recoverable under packet loss.
+- Firmware/extension/MCP protocol behavior is stable and documented.
+
+## Current State (Implemented)
 
 ### Firmware
-- UART JSONL command parsing and ACK/event framing are implemented.
-- `state.request` and `state.set` are implemented.
-- `fw.version.request` is implemented.
-- Build metadata (`version`, `built_at`) is now emitted in firmware control payloads.
-- BLE custom UART-style GATT service (`6E400101-...`) is implemented.
+- BLE UART-style GATT service is active (`6E400101-...`) with device name `air-kvm-ctrl-cb01`.
+- Command router supports pass-through for `dom.snapshot`, `tabs.list`, `screenshot`, and `transfer.*` control messages.
+- UART output is framed binary (`AK`) for control/log/binary payloads.
+- Single deterministic UART TX writer path is enforced on ESP32 (queue + TX task).
+- Oversized BLE control notify payloads are chunked with `ctrl.chunk`.
+- HID code exists, but default app build uses `AIRKVM_ENABLE_HID=0`.
 
 ### MCP
-- STDIO MCP server is implemented with tool `airkvm_send`.
-- UART transport is implemented with command timeout handling.
-- Busy-state request over UART is working end-to-end (`state.request` -> `state` response observed).
-- Protocol validation supports: mouse/key/state/version commands.
-
-### Extension
-- Content script emits DOM summary and busy/idle events.
-- Service worker can connect with Web Bluetooth and send JSONL events over BLE write characteristic.
-- BLE uses Web Bluetooth runtime user prompt flow (no manifest `bluetooth` permission key).
-
-### Docs
-- Architecture/development/protocol docs exist and were updated for current topology.
-- AGENTS now includes explicit current-reality notes.
-
-## What Is Not Done / Broken Relative To Target
-
-1. BLE HID (HOGP) is not implemented.
-- This is the blocker for “device appears as HID on macOS”.
-- Current firmware BLE profile is custom UART, not HID.
-
-2. Extension screenshot pipeline is incomplete for production.
-- No validated, tested end-to-end tab/desktop screenshot retrieval contract consumed by MCP.
-- Desktop capture UX/permission flow and error handling are not hardened.
-
-3. No MCP tools yet for high-level data retrieval.
-- Only `airkvm_send` exists.
-- Missing dedicated tools for:
+- Structured tools exist and are live:
+  - `airkvm_send`
+  - `airkvm_list_tabs`
   - `airkvm_dom_snapshot`
   - `airkvm_screenshot_tab`
   - `airkvm_screenshot_desktop`
+- UART parser supports mixed framed stream (`ctrl`, `log`, `bin`, and `bin_error`).
+- Screenshot collector supports:
+  - binary chunk reassembly
+  - ACK/NACK/resume flow control
+  - done-ack completion
+  - payload validation (`screenshot_corrupt_payload`)
+  - explicit timeout classes (`screenshot_meta_timeout`, `screenshot_transfer_timeout`)
 
-4. No durable request/response correlation layer.
-- Need robust request IDs, chunk reassembly, retries, timeout/error semantics across BLE<->UART hops.
+### Extension
+- BLE bridge page is the primary BLE runtime path.
+- Service worker handles:
+  - `dom.snapshot.request`
+  - `tabs.list.request`
+  - `screenshot.request` (tab + desktop)
+  - transfer session controls (`transfer.resume`, `transfer.ack`, `transfer.done.ack`, `transfer.nack`, `transfer.cancel`, `transfer.reset`)
+- Screenshot path includes capture timeout/stage timeout guards and JPEG downscale/compression logic.
+- Default logging is low-noise; verbose mode is toggleable in bridge UI.
 
-5. Integration tests are incomplete.
-- There is no full integration harness proving:
-  - extension command receipt over BLE
-  - screenshot chunk transfer/reassembly
-  - MCP retrieval semantics
+## Known Remaining Work
 
-## TODO Plan (Proposed Execution Order)
+1. HID path is not the primary validated mode.
+- Firmware HID support needs dedicated validation if HID milestones are re-prioritized.
 
-1. Implement BLE HID (HOGP) on firmware first.
-- Add HID service (`0x1812`) + report map for keyboard/mouse.
-- Validate macOS pairing and HID enumeration.
-- Keep custom UART-like service in parallel only if needed for control channel.
+2. End-to-end resilience testing matrix is still thin.
+- Need broader scripted fault-injection coverage for chunk loss, reconnects, and bridge restarts.
 
-2. Finalize BLE command protocol for browser data.
-- Define canonical command/response messages:
-  - `dom.snapshot.request` -> `dom.snapshot`
-  - `screenshot.request` (`source=tab|desktop`) -> `screenshot.meta` + `screenshot.chunk*` + terminal status
-- Freeze field names and limits in `docs/protocol.md`.
+3. Protocol-level observability can be improved.
+- Keep tightening diagnostics for transfer stalls and lifecycle churn under real-world BLE instability.
 
-3. Complete extension handlers for DOM + screenshot.
-- Handle inbound BLE requests deterministically.
-- Implement tab/desktop capture with strict permission/error behavior.
-- Chunk and send payloads with bounded message size.
+4. Documentation maintenance discipline.
+- Any transport/protocol change must update `docs/protocol.md`, `docs/architecture.md`, and this file in same PR.
 
-4. Add MCP high-level tools.
-- Add `airkvm_dom_snapshot`.
-- Add `airkvm_screenshot_tab`.
-- Add `airkvm_screenshot_desktop`.
-- Tools should hide low-level command details and return structured JSON.
+## Immediate Next Steps
 
-5. Implement response collection/reassembly in MCP.
-- Correlate by `request_id`.
-- Reassemble screenshot chunks, validate sequence/completeness, expose base64 and metadata.
-- Enforce clear timeout/error categories.
+1. Add/expand integration tests that simulate:
+- missing chunks
+- duplicate chunks
+- transfer resume from arbitrary sequence
+- done-ack cleanup correctness
 
-6. Add integration tests + smoke tests.
-- Host-side fake serial tests for chunking/reassembly.
-- End-to-end smoke scripts for real hardware path.
-- Include regression cases for timeout, missing chunk, permission denied.
+2. Validate repeated long-run desktop capture sessions under normal and noisy conditions.
 
-7. Documentation hardening.
-- Update setup docs for macOS HID pairing and extension permissions.
-- Add operator runbook for troubleshooting serial/BLE/HID path.
-
-## Immediate Next Milestone For Review
-- Milestone A: “macOS sees HID device and keyboard/mouse injection works”.
-- Acceptance:
-  - Device advertises HOGP.
-  - macOS pairs successfully.
-  - Verified key tap + mouse move from MCP command path.
-
-## Notes
-- Current branch contains active in-progress edits across firmware, mcp, and extension; not all are integrated into a coherent release yet.
-- This plan is intended to be the canonical checklist before claiming full DOM + screenshot support.
+3. If HID milestone resumes, define a separate HID validation checklist and keep it isolated from BLE UART data path.

@@ -1,36 +1,63 @@
-# Architecture (POC)
+# Architecture (Current)
 
-## Deployment topology
+## Deployment Topology
 
-- Controller/host machine: runs AI agent + MCP server + UART link to ESP32 firmware.
-- Target machine: runs only the browser extension.
-- Extension never connects to MCP.
-- Extension external transport is BLE only.
+- Controller/host machine:
+  - Runs MCP server (`mcp/`) over STDIO JSON-RPC.
+  - Connects to firmware over UART serial.
+- Target machine:
+  - Runs browser extension (`extension/`) only.
+  - Talks to firmware over BLE (Web Bluetooth bridge page).
+- Extension does not connect to MCP directly.
 
-## Layers
+## Layer Responsibilities
 
-1. Firmware (`firmware/`, ESP-WROOM-32)
-- BLE HID keyboard/mouse (stubbed wiring in current scaffold)
-- Serial JSONL command intake from local agent host
-- Future: custom BLE GATT state/screenshot bridge
+1. Firmware (`firmware/`, ESP32)
+- Owns BLE GATT UART service (`6E400101-...`).
+- Routes command lines between BLE and UART.
+- Emits UART framed packets (`AK` framing):
+  - transfer binary (`type=0x01`)
+  - control JSON (`type=0x02`)
+  - log text (`type=0x03`)
+- Sends BLE control notifications directly; chunks oversized control payloads via `ctrl.chunk`.
+- HID support exists in code, but default build has `AIRKVM_ENABLE_HID=0`.
 
-2. Local MCP Server (`mcp/`)
-- STDIO JSON-RPC server with MCP-compatible tool endpoints
-- Validates AI-issued control commands
-- Bridges commands to firmware over UART serial (`AIRKVM_SERIAL_PORT`)
+2. MCP Server (`mcp/`)
+- Exposes tools:
+  - `airkvm_send`
+  - `airkvm_list_tabs`
+  - `airkvm_dom_snapshot`
+  - `airkvm_screenshot_tab`
+  - `airkvm_screenshot_desktop`
+- Validates and forwards control commands to firmware.
+- Parses mixed UART framed stream (control/log/bin).
+- Reassembles screenshot binary transfers and returns base64 payloads.
+- Drives transfer flow control (`transfer.ack`, `transfer.nack`, `transfer.resume`, `transfer.done.ack`).
 
-3. Browser Extension (`extension/`)
-- Content script emits compact DOM summary + busy/idle events
-- Service worker forwards extension events via BLE only
-- Future: on-demand screenshot capture + chunk transport
+3. Extension (`extension/`)
+- `service_worker.js` handles browser automation actions:
+  - `tabs.list.request`
+  - `dom.snapshot.request`
+  - `screenshot.request` (tab/desktop)
+- `ble_bridge.html` + `ble_bridge.js` is the primary BLE runtime context.
+  - Connects via Web Bluetooth.
+  - Forwards control and binary data between service worker and firmware.
+  - Reassembles inbound `ctrl.chunk` messages.
+- `bridge.js` is BLE transport helper (write/read/notify and parsing).
 
-## Data flows
+## Data Paths
 
-- AI agent -> MCP tool call -> validated command -> firmware transport
-- Firmware -> BLE HID -> target machine input injection
+1. DOM / tab list
+- MCP tool call -> UART command -> firmware passthrough -> BLE -> extension service worker -> browser API -> response back through same path.
 
-## Why this split
+2. Screenshot
+- MCP sends `screenshot.request`.
+- Extension captures + JPEG-compresses image.
+- Extension sends `transfer.meta` then binary chunk frames.
+- MCP collector reconstructs image, handles ACK/NACK/resume, then sends `transfer.done.ack`.
 
-- Keeps BLE bandwidth focused on HID control and minimal metadata
-- Enables iterative protocol changes without reflashing for every change
-- Supports future migration from serial to Wi-Fi transport without changing MCP tool surface
+## Design Constraints
+
+- Single deterministic UART writer path on ESP32 via TX queue/task.
+- Cross-platform behavior is implemented in Node/extension logic (no host-specific shell tools required for protocol flow).
+- Extension logging defaults to low-noise mode; verbose mode is opt-in in bridge UI.
