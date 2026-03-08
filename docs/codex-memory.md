@@ -116,6 +116,9 @@
   - Extension can emit gzip-compressed base64 payload chunks (`b64z`) while control plane remains JSON.
   - MCP collector transparently gunzips `b64z` and returns standard image base64 in tool result.
   - This is a compatibility-first hybrid step; full raw-binary chunk transport is still future work.
+  - Bug fix: encoding label now reflects actual payload mode.
+    - If gzip API is unavailable or gzip is not smaller, extension now falls back to `b64` and marks meta as `e: "b64"`.
+    - Prevents mismatched `b64z` metadata for non-gzipped payloads.
 - Bridge health watchdog:
   - Added periodic BLE health ping (`state.request`) in bridge page.
   - If ping ACKs fail consecutively (`kHealthMaxMisses`), bridge now auto-disconnects and updates status.

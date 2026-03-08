@@ -268,17 +268,25 @@ async function sendScreenshot(command) {
   const config = resolveScreenshotConfig(command);
   config.tabId = Number.isInteger(command?.tab_id) ? command.tab_id : null;
   const encoded = source === 'desktop' ? await captureDesktopPng(config) : await captureTabPng(config);
-  const payload = config.encoding === 'b64z' ? await gzipDataUrlBase64(encoded.dataUrl) : null;
+  const compression = config.encoding === 'b64z'
+    ? await tryGzipDataUrlBase64(encoded.dataUrl)
+    : { encoding: 'b64', payloadBase64: null };
   const { meta, chunks } = dataUrlToMetaAndChunks(
     encoded.dataUrl,
     requestId,
     source,
     encoded,
     120,
-    config.encoding,
-    payload
+    compression.encoding,
+    compression.payloadBase64
   );
-  debugLog('sendScreenshot encoded', { source, requestId, chunks: chunks.length, totalChars: meta.tch });
+  debugLog('sendScreenshot encoded', {
+    source,
+    requestId,
+    encoding: compression.encoding,
+    chunks: chunks.length,
+    totalChars: meta.tch
+  });
   await postEventViaBridge(meta);
   for (const chunk of chunks) {
     // BLE payloads are chunked to reduce risk of exceeding negotiated MTU.
@@ -286,13 +294,13 @@ async function sendScreenshot(command) {
   }
 }
 
-async function gzipDataUrlBase64(dataUrl) {
+async function tryGzipDataUrlBase64(dataUrl) {
   const comma = dataUrl.indexOf(',');
   if (comma === -1) throw new Error('screenshot_invalid_data_url');
   const base64 = dataUrl.slice(comma + 1);
   const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
   if (typeof CompressionStream !== 'function') {
-    return base64;
+    return { encoding: 'b64', payloadBase64: null };
   }
   const cs = new CompressionStream('gzip');
   const writer = cs.writable.getWriter();
@@ -304,7 +312,12 @@ async function gzipDataUrlBase64(dataUrl) {
   for (let i = 0; i < zipped.length; i += 1) {
     binary += String.fromCharCode(zipped[i]);
   }
-  return btoa(binary);
+  const zippedBase64 = btoa(binary);
+  if (zippedBase64.length >= base64.length) {
+    // Do not claim compressed mode when it does not reduce payload size.
+    return { encoding: 'b64', payloadBase64: null };
+  }
+  return { encoding: 'b64z', payloadBase64: zippedBase64 };
 }
 
 async function sendTabsList(command) {
