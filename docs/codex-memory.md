@@ -1,399 +1,54 @@
-# Codex Memory Handoff (March 7, 2026)
+# Codex Memory (Compact)
 
-## Non-Negotiable Architecture Rules
-- Extension runs on target machine.
-- Extension talks only via BLE (never localhost/MCP).
-- MCP runs on controller/host machine and talks to device via UART.
+## Current Truth
+- Topology:
+  - Host/controller runs MCP and connects to firmware over UART.
+  - Target machine runs extension only.
+  - Extension talks to firmware via BLE only (no localhost/MCP direct path).
+- Active transport/protocol path:
+  - BLE UART-style GATT service (`6E400101-B5A3-F393-E0A9-E50E24DCCB01`).
+  - Firmware UART output uses framed `AK` packets:
+    - `0x01` binary transfer chunk
+    - `0x02` control JSON
+    - `0x03` log text
+- Current BLE device name: `air-kvm-ctrl-cb01`.
+- Current MCP tools:
+  - `airkvm_send`
+  - `airkvm_list_tabs`
+  - `airkvm_dom_snapshot`
+  - `airkvm_screenshot_tab`
+  - `airkvm_screenshot_desktop`
 
-## Current Reality
-- Firmware BLE profile is currently custom UART-like (`6E400101-B5A3-F393-E0A9-E50E24DCCB01`), not HOGP.
-- Therefore device does not enumerate as HID on macOS yet.
-- MCP busy-state check works over UART (`state.request` -> `state` response confirmed live).
-- DOM snapshot now works end-to-end over BLE bridge + UART MCP path.
+## Key Decisions
+- Determinism / fail-fast:
+  - ESP32 TX queue creation failure is fatal (`abort()`), no degraded fallback path.
+  - ESP32 UART TX uses one deterministic queue/task writer path.
+- Screenshot transfer path:
+  - Binary transfer is authoritative (`encoding: "bin"`).
+  - Lifecycle uses `transfer.meta` -> binary chunks -> `transfer.done` -> `transfer.done.ack`.
+  - MCP drives flow control with `transfer.ack`, `transfer.nack`, `transfer.resume`.
+  - Extension enforces one active screenshot transfer session.
+- BLE control continuation:
+  - Oversized BLE control payloads use `ctrl.chunk`; extension reassembles before dispatch.
 
-## Session Changes Landed
-- Removed extension localhost/MCP HTTP path and related manifest host permissions.
-- Added Web Bluetooth transport scaffolding in extension (`navigator.bluetooth` connect/write).
-- Added firmware command `fw.version.request` and response includes `version` + `built_at`.
-- Added MCP support/validation for `fw.version.request`.
-- Added UART debug/timeout knobs in MCP:
-  - `AIRKVM_UART_DEBUG=1`
-  - `AIRKVM_SERIAL_TIMEOUT_MS=<ms>`
-- Added docs planning/status:
-  - `docs/plan.md`
-  - AGENTS current-reality notes
-- Confirmed Web Bluetooth permission model for MV3 extension:
-  - Do **not** add `"bluetooth"` under `permissions` or `optional_permissions` (unknown permission error).
-  - Web Bluetooth in extensions uses runtime user prompt flow via `navigator.bluetooth.requestDevice(...)`.
-- Extension action click feedback:
-  - Added badge status on click so failures are visible (`...`, `BLE`, `NO`, `ERR`).
-  - Previous behavior silently swallowed failures and appeared as “nothing happens”.
-  - `NO` specifically means `navigator.bluetooth.requestDevice` is unavailable in the current extension context.
-- Edge runtime note: action click currently reports `NO` in Edge because BLE request API is not available in this background context.
-- BLE transport host page (primary path):
-  - `src/ble_bridge.html` + `src/ble_bridge.js` is the primary BLE context.
-  - Service worker forwards BLE post/command traffic via runtime messages to that page (`ble.post`, `ble.command`).
-  - Action click opens/activates bridge tab and shows `TAB` badge.
-- Extension debug logging:
-  - Added verbose logs in service worker (`[airkvm-sw]`), BLE bridge page (`[airkvm-bridge]`), and BLE transport module (`[airkvm-ble]`).
-  - Intended to debug live DOM/screenshot command flow across bridge + runtime message hops.
-  - Added per-message trace IDs from service worker -> bridge page -> BLE writer.
-  - BLE writer now logs payload byte size and write mode (`withResponse` preferred, fallback to `withoutResponse`).
-- BLE stream validation:
-  - Bridge now sends `state.request` immediately after connect and requires a valid JSON control reply (`state` or `ok`) within timeout.
-  - If handshake fails and only binary noise is observed, bridge marks connection as invalid stream instead of reporting connected.
-- BLE device selection hardening:
-  - Bridge persists preferred BLE device ID in `chrome.storage.local` and attempts reconnect via `navigator.bluetooth.getDevices()` first.
-  - Chooser request now filters by both UART service UUID and `namePrefix: "air-kvm"` when manual selection is needed.
-- Bridge UX controls for hard reset:
-  - Added buttons in `ble_bridge.html`: `Disconnect`, `Forget Saved Device`, and `Reconnect (Chooser)`.
-  - `Reconnect (Chooser)` now disconnects active GATT session, clears preferred device ID, and forces fresh selection flow.
-  - Invalid handshake path now explicitly disconnects and clears preferred device before marking invalid stream.
-- Bridge page now has a built-in log console:
-  - Added `#log` panel + `Clear Log` button to `ble_bridge.html`.
-  - `ble_bridge.js` mirrors bridge debug events into the page log with timestamps and keeps a capped line history.
-  - This allows runtime debugging without opening DevTools.
-  - `bridge.js` low-level BLE logs now also flow into the page log (`[ble]` prefix), including RX byte previews and TX write mode.
-- BLE cache-bust change:
-  - Rolled UART BLE UUID set in firmware + extension to force fresh GATT discovery and avoid stale-handle reconnects.
-  - New UUIDs:
-    - service: `6E400101-B5A3-F393-E0A9-E50E24DCCB01`
-    - RX: `6E400102-B5A3-F393-E0A9-E50E24DCCB01`
-    - TX: `6E400103-B5A3-F393-E0A9-E50E24DCCB01`
-- Device disambiguation hardening:
-  - Firmware BLE advertised name changed to `air-kvm-ctrl-cb01`.
-  - Extension chooser filter now requires exact `name: "air-kvm-ctrl-cb01"` with UART service UUID.
-  - Goal is to avoid connecting to similarly named non-control peripherals.
-- Critical BLE TX bug found/fixed:
-  - `NimBLECharacteristic::setValue(payload)` with `const char*` was sending pointer bytes (4-byte binary values) instead of JSON text.
-  - This exactly matched observed notification payloads like `19 07 40 3f` / `70 04 40 3f`.
-  - Fixed by using explicit byte+length overload:
-    - `setValue(reinterpret_cast<const uint8_t*>(payload), strlen(payload))`
-  - Applied in `transport_mux.cpp` and boot payload initialization in `app.cpp`.
-- Review-driven hardening updates:
-  - Bridge connect flow is now guarded against re-entry (`connectInFlight`) to prevent overlapping handshake loops.
-  - Disconnect now clears `bleDevice` in addition to characteristic handles/buffers.
-  - Bridge now forwards ack-only control frames (for example `{ "ok": true }`) to service worker instead of dropping non-`type` payloads.
-  - Firmware boot identity string now matches control device naming (`air-kvm-ctrl-cb01`).
-- Chooser visibility hotfix:
-  - Strict exact-name filter could hide valid devices during transition.
-  - Bridge chooser now matches by service UUID with fallback filters for both names (`air-kvm-ctrl-cb01`, `air-kvm-poc`) and service-only.
-- Ack frame unwrap fix:
-  - `unwrapCommand` now treats `{ "ok": <bool> }` and `{ "error": <string> }` as valid control frames.
-  - Prevents dropping protocol ack/error frames during bridge forwarding.
-- Bridge diagnostics now include deeper BLE stream introspection:
-  - Logs connected device info immediately after GATT connect (before handshake success/failure).
-  - Logs raw notification hex bytes (`rx notify`) from TX characteristic.
-  - On handshake timeout, attempts `readValue()` snapshot on TX characteristic and logs bytes/hex/text.
-  - Logs full GATT service/characteristic inventory (`gatt services`) and selected service/RX/TX UUID+properties on connect.
-- DOM E2E validation (March 7, 2026):
-  - MCP tool `airkvm_dom_snapshot` returned successful structured payload.
-  - Verified title/url in returned snapshot (`Google`, `https://www.google.com/`).
-  - Confirms BLE request -> extension capture -> UART relay -> MCP collector roundtrip is functioning.
-- Operational caveat discovered:
-  - When the bridge is not actively connected/subscribed, firmware still echoes `dom.snapshot.request` / `screenshot.request` and emits `{ "ok": true }` on UART, but no `rx.ble` response frames follow.
-  - MCP then returns `transport_error` with `device_timeout`.
-  - Practical pre-check before MCP tool calls: bridge page must show `Connected` after successful handshake.
-- Screenshot permission fix (March 7, 2026):
-  - Live `airkvm_screenshot_tab` returned explicit error:
-    - `Either the '<all_urls>' or 'activeTab' permission is required.`
-  - Added `host_permissions: ["<all_urls>"]` to extension manifest to allow non-click-driven screenshot requests.
-- DevTools capture trap fix:
-  - `chrome.tabs.captureVisibleTab` captures the active tab, which failed when DevTools/extension tab was focused.
-  - Updated tab screenshot flow to resolve a valid automation tab and activate it before capture.
-- Desktop chooser prompt fix:
-  - `desktop_capture_denied` could occur without visible picker when chooser was not tab-scoped.
-  - Updated `chooseDesktopMedia` call to pass resolved target tab so user approval prompt is attached to a real browser tab.
-- Edge desktop capture compatibility attempt:
-  - Moved desktop frame capture flow into bridge page context and exposed `desktop.capture.request` runtime route.
-  - Added `getUserMedia` compatibility fallback (`mediaDevices.getUserMedia` and legacy `getUserMedia/webkitGetUserMedia/mozGetUserMedia`).
-- New MCP tab selection workflow:
-  - Added structured tool `airkvm_list_tabs` (`tabs.list.request` -> `tabs.list`).
-  - Extension now returns filtered automatable tabs with fields: `id`, `window_id`, `active`, `title`, `url`.
-  - Screenshot requests now accept optional `tab_id` to target a specific tab.
-- Hybrid screenshot transport mode (phase 1):
-  - Added optional `encoding` for screenshot requests: `b64` (default) or `b64z`.
-  - Extension can emit gzip-compressed base64 payload chunks (`b64z`) while control plane remains JSON.
-  - MCP collector transparently gunzips `b64z` and returns standard image base64 in tool result.
-  - This is a compatibility-first hybrid step; full raw-binary chunk transport is still future work.
-  - Bug fix: encoding label now reflects actual payload mode.
-    - If gzip API is unavailable or gzip is not smaller, extension now falls back to `b64` and marks meta as `e: "b64"`.
-    - Prevents mismatched `b64z` metadata for non-gzipped payloads.
-  - Stability fix: compression timeout guard.
-    - Wrapped `CompressionStream` path in a short timeout and guaranteed fallback to `b64` on timeout/error.
-    - Prevents `b64z` requests from hanging screenshot flow when gzip stream stalls in service worker context.
-- Bridge health watchdog:
-  - Added periodic BLE health ping (`state.request`) in bridge page.
-  - If ping ACKs fail consecutively (`kHealthMaxMisses`), bridge now auto-disconnects and updates status.
-  - Added immediate `gattserverdisconnected` callback hook from `bridge.js` into bridge page status path.
-  - Purpose: avoid stale UI `Connected` state when BLE transport silently dies.
-  - Tuned for long-running screenshot operations:
-    - suspend health checks while `dom.snapshot.request` / `screenshot.request` are being handled.
-    - relaxed timeout policy (`interval=6000ms`, `timeout=4000ms`, `maxMisses=4`) to reduce false disconnects.
+## Logging Defaults
+- Bridge page logging defaults to low-noise mode.
+- Verbose mode toggle exists in bridge UI and controls raw BLE trace visibility.
+- Default command log behavior:
+  - suppress `SW->BLE` command entries unless verbose
+  - suppress ACK-noise (`transfer.ack`, plain `{ok:true}`) unless verbose
+  - classify plain `{ok:true}` as `type: "ack"` when shown
 
-## In-Progress / Not Complete
-- BLE HID (HOGP) is not implemented (main blocker).
-- Tab/desktop screenshot end-to-end retrieval via MCP tools still needs live validation.
-- Some scaffolding for new message types exists, but not yet a finalized tested pipeline.
+## User Preferences (Operational)
+- Cross-platform first (Node-based paths; avoid OS-specific command dependencies in core flow).
+- Commit frequently.
+- Keep `codex-memory` updated when important behavior/process decisions change.
 
-## Next Work Order (Priority)
-1. Implement BLE HID (HOGP) in firmware and validate macOS pairing/enumeration.
-2. Finalize DOM/screenshot request-response protocol and bounds (chunking, IDs, timeouts).
-3. Implement MCP high-level tools (`airkvm_dom_snapshot`, `airkvm_screenshot_tab`, `airkvm_screenshot_desktop`).
-4. Complete extension handlers and permissions UX for tab/desktop capture.
-5. Add integration tests and hardware smoke checks.
+## Known Risks / Gaps
+- Dedicated service-worker unit tests are still missing (backlog item).
+- HID path exists in firmware code but is not the primary validated runtime path (`AIRKVM_ENABLE_HID=0` in default app build).
 
-## Useful Commands
-- MCP tests: `cd mcp && node --test`
-- Firmware host tests: `cd firmware && pio test -e native`
-- MCP live run: `cd mcp && AIRKVM_SERIAL_PORT=/dev/cu.usbserial-0001 node src/index.js`
-- Live debug probe: `AIRKVM_UART_DEBUG=1 AIRKVM_SERIAL_TIMEOUT_MS=6000 ...`
-- Screenshot stall instrumentation update (March 7, 2026, late):
-  - Service worker now wraps capture stage in explicit timeout (`screenshot_capture_timeout`, 25s).
-  - Added stage logs in `sendScreenshot`: `capture begin`, `capture done`, and `compression` selection.
-  - Added explicit ignore logging for non-command BLE payloads (for example `{ "ok": true }`) in `handleBleCommand` to reduce false-positive debugging paths.
-  - Verification: `cd extension && node --test` and `cd mcp && node --test test/server.test.js test/tools.test.js` both pass after changes.
-- Screenshot resiliency hardening (March 7, 2026, follow-up):
-  - Added global in-flight screenshot guard in service worker; concurrent screenshot requests now fail fast with `screenshot_busy`.
-  - `withTimeout` now clears internal timers via `finally` to avoid timeout handle buildup.
-  - Added per-stage screenshot timeouts in JPEG pipeline:
-    - `screenshot_fetch_timeout`
-    - `screenshot_blob_timeout`
-    - `screenshot_bitmap_timeout`
-    - `screenshot_encode_timeout`
-  - Goal: convert silent/long hangs into explicit error frames and prevent request pileups.
-  - Verification: `cd extension && node --test`; `cd mcp && node --test test/server.test.js test/tools.test.js` both pass.
-- Reliable screenshot transfer protocol scaffolding (March 7, 2026, evening):
-  - MCP collector upgraded for transfer-session frames:
-    - consumes `transfer.meta` / `transfer.chunk` / `transfer.done` / `transfer.error`
-    - emits `transfer.ack` (highest contiguous seq) while receiving chunks
-    - uses collector timeout hook to emit `transfer.resume` from next missing seq
-    - emits structured error for `transfer.error` (notably `no_such_transfer`)
-    - keeps backward compatibility with legacy `screenshot.meta` / `screenshot.chunk`.
-  - UART transport upgraded for collector-driven outbound control:
-    - collector can now return `outbound` commands that are transmitted during in-flight command handling
-    - collector can extend command timeout (`extendTimeoutMs`) and run `onTimeout` retry logic.
-  - Extension service worker now supports transfer session state:
-    - stores screenshot payload chunks by `transfer_id` (in-memory map, TTL-pruned)
-    - responds to `transfer.resume`, `transfer.ack`, `transfer.done.ack`, `transfer.cancel`, `transfer.reset`
-    - returns `transfer.error` with `code: no_such_transfer` when session missing.
-  - Firmware pass-through extended for all `transfer.*` types so control frames traverse UART/BLE unchanged.
-  - Test status after changes:
-    - `cd mcp && node --test` => pass
-    - `cd extension && node --test` => pass
-    - `cd firmware && pio test -e native` => pass
-- Protocol docs cleanup (March 7, 2026, late):
-  - Rewrote `docs/protocol.md` to match current protocol and removed all "legacy" framing language.
-  - `transfer.*` screenshot session flow is now documented as the authoritative path.
-- Bridge health proof-of-life tuning (March 7, 2026, late night):
-  - Added explicit health activity tracking in `extension/src/ble_bridge.js` (`lastActivityAt`).
-  - Any active bridge traffic now marks connection alive:
-    - incoming BLE control frames (including `transfer.*`)
-    - service-worker `ble.post` requests routed through bridge page.
-  - Health watchdog now skips ping/disconnect progression while recent activity is present (`< 2 * ping interval`).
-  - Goal: prevent false `health:timeout` disconnects during active screenshot/transfer data flow.
-- SW lifecycle churn observability added (March 7, 2026, late night):
-  - `service_worker.js` now emits stable `instance_id` in all logs and periodic `ble.sw.alive` heartbeats to bridge page.
-  - Added SW lifecycle diagnostics:
-    - boot log + breadcrumb
-    - `onInstalled`, `onStartup`, `activate`, and (if available) `onSuspend`/`onSuspendCanceled` logs.
-  - Added transfer breadcrumbs in `chrome.storage.session` (`airkvm_sw_breadcrumb`) for transfer create/resume/ack/cancel/reset paths.
-  - `transfer.resume` miss now returns `transfer.error` with detail containing:
-    - current `instance_id`
-    - active in-memory transfer IDs
-    - last persisted breadcrumb snapshot.
-  - Bridge page now logs `ble.sw.alive` and detects SW instance changes.
-- Team workflow update (March 7, 2026, late night):
-  - Added `INVESTIGATOR` role as mandatory for unclear failures.
-  - Investigator gate requires evidence-first root-cause analysis (logs/traces/code-path proof/disproof), not speculative explanations.
-  - Persisted in `manager_plan.md` and `notes.md` so future runs enforce root-cause accountability.
-- Screenshot transfer lifecycle finding (March 8, 2026):
-  - Root cause of repeated `b64z` timeout while SW showed `transfer.done`:
-    - `transfer.done.ack` was incorrectly handled as regular `transfer.ack`, so completed sessions were never deleted in extension SW.
-    - Stale session traffic could continue and starve subsequent screenshot requests.
-  - Fix:
-    - Added dedicated `handleTransferDoneAck` that removes transfer session on done-ack.
-    - Added strict single-active-transfer gate in `sendScreenshot`; new screenshot requests fail fast with `screenshot_transfer_busy:<transfer_id>` if any transfer session is still active.
-  - Temporary MCP debug aid:
-    - MCP screenshot tool success path now writes decoded image to `temp/` and returns `saved_path`/`saved_bytes`.
-    - Explicit TODO added to remove this autosave after reliability testing.
-  - Follow-up hardening:
-    - Extension now handles `transfer.done.ack` separately and deletes completed transfer sessions (prevents stale session starvation).
-    - Extension enforces one active screenshot transfer session at a time (`screenshot_transfer_busy:<transfer_id>` on overlap).
-    - MCP collector now ignores `transfer.chunk` frames until `transfer.meta` is observed for that request.
-    - MCP collector validates image magic bytes for `image/jpeg` and `image/png`; invalid payload returns `screenshot_corrupt_payload`.
-    - MCP screenshot autosave is now opt-in behind `AIRKVM_SAVE_SCREENSHOTS=1` to avoid test pollution.
-- Binary screenshot transfer cutover (March 8, 2026, evening):
-  - `b64`/`b64z` screenshot chunk transport was replaced with binary chunk frames.
-  - Binary frame format now includes:
-    - magic bytes (`0x41 0x4B`)
-    - version
-    - frame type
-    - `transfer_id` (uint32 LE)
-    - `seq` (uint32 LE)
-    - `payload_len` (uint16 LE)
-    - `payload`
-    - `crc32` (uint32 LE)
-  - Extension now:
-    - emits `transfer.meta` with `encoding: "bin"`
-    - sends chunk payload using raw framed binary (`ble.postBinary`)
-    - handles `transfer.nack` to resend a specific seq
-    - keeps single active transfer session policy.
-  - Firmware now:
-    - detects binary transfer frame writes on BLE RX by magic/length
-    - forwards those bytes losslessly to UART via `EmitBinaryFrame`
-    - keeps JSON command path for all control messages.
-  - MCP now:
-    - parses mixed UART stream (JSON lines + binary frames)
-    - validates binary frame length + CRC32
-    - emits `transfer.nack` for bad binary chunk frames
-    - reassembles screenshots from binary payloads and still returns base64 tool output.
-  - Test status after cutover:
-    - `cd mcp && node --test` pass
-    - `cd extension && node --test` pass
-    - `cd firmware && pio test -e native` pass
-    - `cd firmware && pio run -e esp32dev` pass
-- BLE write-mode stability finding (March 8, 2026, field log):
-  - Observed connect/handshake failure at first control write:
-    - `writeValueWithResponse` failed with "GATT operation failed for unknown reason"
-    - immediate `gattserverdisconnected`.
-  - Mitigation applied:
-    - extension BLE write path now prefers `writeValueWithoutResponse` first
-    - falls back to `writeValueWithResponse` only if needed.
-- Deterministic first-command disconnect mitigation (March 8, 2026):
-  - Hypothesis confirmed by timing: disconnect occurs immediately after first command write, before response is observed.
-  - Firmware fix:
-    - BLE write callback no longer parses/handles commands directly.
-    - Callback now enqueues raw BLE writes to a bounded FreeRTOS queue.
-    - Main loop drains queue and performs command parsing + response emission in normal app context.
-  - Goal: remove protocol/notify work from BLE callback context to avoid stack-context disconnects.
-- UART noise reduction (March 7, 2026, investigator action):
-  - Stopped mirroring BLE ingress payload logs (`rx.ble ...`) to UART in `CommandRouter::ProcessLine`.
-  - Rationale: BLE command echo on UART created heavy log noise and increased risk of framing interleaving/parse confusion during screenshot transfers.
-  - Validation: `cd firmware && pio test -e native` pass.
-- Firmware TX serialization fix (March 7, 2026, investigator):
-  - Implemented single-writer queued transport in `TransportMux` on ESP32 using FreeRTOS queue + dedicated TX task.
-  - `EmitControl`/`EmitLog` now enqueue frames; one task emits full UART lines and BLE notifications, preventing interleaved multi-context writes.
-  - `AirKvmApp::Setup` now calls `transport_.Begin()`.
-  - Maintains non-ESP32 direct fallback path for host/native builds.
-  - Validation:
-    - `cd firmware && pio test -e native` pass
-    - `cd firmware && pio run -e esp32dev` pass
-- Investigator regression finding (March 8, 2026, early):
-  - New failure after flashing serialized-TX firmware:
-    - BLE connect succeeds, first `state.request` write fails (`GATT operation failed for unknown reason`), then immediate `gattserverdisconnected`.
-    - Handshake retries fail with no snapshot payload.
-  - Strong evidence points to BLE notify from dedicated FreeRTOS TX task causing disconnects on this stack/context.
-  - Mitigation applied:
-    - Keep UART queue/task serialization.
-    - Move BLE `setValue+notify` back to immediate `EmitControl` path (same execution context as command handling).
-  - Local validation after mitigation:
-    - `cd firmware && pio test -e native` pass
-    - `cd firmware && pio run -e esp32dev` pass
-- Deterministic binary transfer flow-control hardening (March 8, 2026, late):
-  - Root issue: extension could blast all binary chunks before MCP ACK progression, then send `transfer.done`; on loss, MCP stalled at partial contiguous seq and timed out.
-  - Extension service worker now uses explicit ACK-window flow control:
-    - added `kTransferAckWindow = 8`
-    - sends only up to `highestAckSeq + window`
-    - advances transmission on `transfer.ack`
-    - supports deterministic restart from `transfer.resume` by resetting `nextSeqToSend`
-    - still retransmits exact chunk on `transfer.nack`
-  - Removed delay-based pacing approach; transfer progression is now receiver-driven instead of timer-driven.
-  - Control-plane send hardening:
-    - `transfer.meta` and `transfer.done` now use `postEventOrThrow` to fail explicitly if bridge post fails.
-  - Regression guard:
-    - MCP UART collector invocation now only triggers on JSON control frames or binary frame kinds (`bin`, `bin_error`) to avoid null-message crashes in non-screenshot flows.
-  - Validation:
-    - `cd extension && node --test` pass
-    - `cd mcp && node --test` pass
-- ACK pacing correction (March 8, 2026, late follow-up):
-  - Investigator finding: MCP ACK stride gating could create apparent sender stalls during windowed transfer when contiguous progress did not cross stride quickly.
-  - Finalized fix (deterministic without per-frame ACK spam):
-    - restore ACK stride gating (`kAckStride = 8`)
-    - add immediate gap detection: when out-of-order chunk arrives and first missing seq is known, emit `transfer.nack` (`reason: "missing_chunk"`) immediately.
-  - Result: sender gets fast loss recovery signal without requiring timeout or per-frame ACK chatter.
-  - Observability upgrade:
-    - MCP UART debug now logs every collector outbound control command as:
-      - `collector outbound={...}`
-    - This includes `transfer.ack`, `transfer.nack`, `transfer.resume`, `transfer.done.ack`, enabling exact request/transfer/seq traceability.
-  - Validation:
-    - `cd mcp && node --test` pass.
-- Firmware BLE notify instrumentation compile fix (March 8, 2026):
-  - NimBLE API in this environment exposes `setValue(...)` and `notify()` as `void`.
-  - Prior attempt to capture bool return values caused ESP32 compile errors.
-  - Updated instrumentation to:
-    - call `setValue/notify` directly
-    - emit trace log `ble.ctrl_notify_sent type=<...>` for high-value control frames (`transfer.*`, `screenshot.request`, `state.request`).
-  - Validation:
-    - `cd firmware && pio test -e native` pass
-    - `cd firmware && pio run -e esp32dev` pass
-- BLE control continuation added (March 8, 2026, exploration):
-  - Root cause evidence: `transfer.meta` control JSON was truncated at BLE notify size and poisoned bridge JSON parsing, preventing subsequent `transfer.ack`/`transfer.resume` handling.
-  - Firmware now supports BLE-only control chunking:
-    - large control payloads are sent as `{"type":"ctrl.chunk","chunk_id","seq","total","frag"}` frames.
-  - Extension bridge now reassembles `ctrl.chunk` fragments by `chunk_id`, parses full JSON only after all fragments arrive, and suppresses partial fragments from command handlers.
-  - Added bridge unit test verifying `ctrl.chunk` reassembly into a single forwarded control command.
-  - Current limitation (known): continuation is currently implemented for firmware->extension control path; reverse direction continuation is not yet implemented.
-- Desktop screenshot timing improvement (March 8, 2026):
-  - User-observed issue: desktop permission dialog animation could be captured in first frame.
-  - Added optional `desktop_delay_ms` to `screenshot.request` for desktop source.
-  - MCP tooling now accepts/passes `desktop_delay_ms` for `airkvm_screenshot_desktop`.
-  - Extension service worker forwards delay hint to bridge capture route.
-  - Bridge applies bounded wait (`0..5000ms`) after permission grant and before `ImageCapture.grabFrame()`.
-- UART determinism correction (March 8, 2026):
-  - Root cause review found ESP32 TX fallback in `TransportMux::EnqueueFrame`:
-    - queue send timeout could call `EmitFrameDirect(...)` from producer context.
-    - this violated single-writer intent and could interleave with TX task output.
-  - Fixed by removing ESP32 direct-write fallback entirely:
-    - ESP32 path now always enqueues to TX task (`xQueueSend(..., portMAX_DELAY)`).
-    - non-ESP32 host path still emits directly.
-  - Outcome: one deterministic UART writer path on ESP32, reduced framing corruption risk.
-- Fail-fast policy reinforcement (March 8, 2026):
-  - Project direction explicitly prefers fail-fast over fallback/recovery for transport init.
-  - `TransportMux::Begin()` now calls `abort()` if `xQueueCreate(...)` fails on ESP32.
-  - Intent: avoid hidden degraded modes and keep runtime behavior deterministic/single-path.
-- UART stream abstraction rollout (March 8, 2026):
-  - Firmware now emits control and log over framed UART packets (same `AK` binary envelope as transfer chunks):
-    - `frame_type=0x02` control JSON payload
-    - `frame_type=0x03` log text payload
-    - transfer chunks remain `frame_type=0x01`
-  - MCP binary frame decoder now supports all three frame types and yields `ctrl`/`log`/`bin` frames directly.
-  - CRC/frame decode failures now consume full frame length once header+length are available, reducing parser desync risk.
-  - MCP UART ingest is now framed-stream first and does not rely on JSONL parsing for device responses.
-  - Regression found immediately after rollout: device could fail to appear in BLE chooser.
-    - Cause: fail-fast queue init + large `TxFrame` size made queue allocation too heavy at depth 128.
-    - Fix: reduced TX queue depth to 12 to keep single-path behavior without startup allocation failure.
-- Screenshot timeout behavior correction (March 8, 2026):
-  - MCP screenshot collector timed out too early when no `transfer.meta` had arrived yet.
-  - Added explicit pre-meta timeout window:
-    - retries: 6
-    - extend interval: 5000ms
-    - terminal error: `screenshot_meta_timeout`
-  - Transfer-phase timeout/retry behavior after meta (`transfer.resume`, bounded retries) remains unchanged.
-  - Live debug validation (`AIRKVM_UART_DEBUG=1`):
-    - desktop screenshot request completed end-to-end with progressive `transfer.ack` and final `transfer.done.ack`.
-    - response returned `mime=image/jpeg`, `encoding=bin`, and full base64 payload.
-- Tool harness reliability fix (March 8, 2026):
-  - Root cause of false "MCP timeout/hang" during large screenshot responses was client-side stdout parsing:
-    - parser split each incoming chunk on `\\n` without carry buffer, dropping partial JSON-RPC lines.
-  - Added robust line-buffered tool harness script:
-    - `scripts/mcp-tool-call.mjs`
-    - supports large responses by carrying incomplete stdout line fragments across chunks.
-  - Updated existing smoke harness (`scripts/poc-smoke.mjs`) to use the same buffered line parsing pattern.
-- Extension UX/logging tune (March 8, 2026):
-  - Bridge page restyled to dark mode card layout with cleaner controls.
-  - Added bridge-page `Verbose: ON/OFF` toggle (persisted in local storage).
-  - Reduced BLE log spam by gating byte-level notify/tx tracing behind verbose mode.
-  - Service worker verbose logging is now off by default and can be toggled from bridge page (`airkvm.debug.set` message).
-
-- 2026-03-07: User preference: command-level bridge logs should always be visible in the bridge page log; raw BLE byte/notify traces remain verbose-only.
-- 2026-03-07: Bridge command log policy: always-visible lifecycle commands, but transport ACKs (plain {ok:true}) and transfer.ack are verbose-only; summarize plain ok frames as type=ack.
-- 2026-03-07: Bridge default log now suppresses SW->BLE command entries; enable Verbose to see outbound command traffic.
-- 2026-03-08: Updated AGENTS/docs to document MCP harness usage (scripts/mcp-tool-call.mjs), current 5 MCP tools, and framed UART protocol reality.
-- 2026-03-08: Option-2 cleanup pass started.
-  - Added mirrored screenshot contract constants in `extension/src/screenshot_contract.js` and `mcp/src/screenshot_contract.js`.
-  - Wired MCP tool schema bounds and extension screenshot config clamps to contract constants.
-  - Added parity test `mcp/test/screenshot_contract_parity.test.js` to prevent contract drift.
-  - Refactored extension service-worker BLE command handling to dispatch-map + shared error wrapper (`runBridgeHandler`) without changing command surface.
-  - Consolidated bridge-page log rendering helpers (`renderLogParts`, `appendStampedLog`) to remove formatting duplication.
-  - Added Option-3 backlog item in `manager_plan.md` for explicit service-worker tests.
+## Pointers
+- Protocol authority: `docs/protocol.md`
+- Current architecture summary: `docs/architecture.md`
+- Current execution plan/backlog: `manager_plan.md` + `docs/plan.md`
