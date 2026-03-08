@@ -44,6 +44,8 @@ void TransportMux::Begin() {
   if (tx_queue_ != nullptr) return;
   tx_queue_ = static_cast<void*>(xQueueCreate(128, sizeof(TxFrame)));
   if (tx_queue_ == nullptr) {
+    Serial.println("{\"ch\":\"log\",\"msg\":\"fatal:tx_queue_create_failed\"}");
+    Serial.flush();
     abort();
   }
   xTaskCreatePinnedToCore(
