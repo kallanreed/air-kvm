@@ -39,12 +39,17 @@ let lastSwInstanceId = null;
 
 function appendLog(line) {
   if (!logEl) return;
+  const kAutoScrollThresholdPx = 16;
+  const wasNearBottom =
+    logEl.scrollTop + logEl.clientHeight >= (logEl.scrollHeight - kAutoScrollThresholdPx);
   logLines.push(line);
   if (logLines.length > kMaxLogLines) {
     logLines = logLines.slice(logLines.length - kMaxLogLines);
   }
   logEl.textContent = logLines.join('\n');
-  logEl.scrollTop = logEl.scrollHeight;
+  if (wasNearBottom) {
+    logEl.scrollTop = logEl.scrollHeight;
+  }
 }
 
 function debugLog(...args) {
