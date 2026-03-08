@@ -185,3 +185,10 @@
 - Protocol docs cleanup (March 7, 2026, late):
   - Rewrote `docs/protocol.md` to match current protocol and removed all "legacy" framing language.
   - `transfer.*` screenshot session flow is now documented as the authoritative path.
+- Bridge health proof-of-life tuning (March 7, 2026, late night):
+  - Added explicit health activity tracking in `extension/src/ble_bridge.js` (`lastActivityAt`).
+  - Any active bridge traffic now marks connection alive:
+    - incoming BLE control frames (including `transfer.*`)
+    - service-worker `ble.post` requests routed through bridge page.
+  - Health watchdog now skips ping/disconnect progression while recent activity is present (`< 2 * ping interval`).
+  - Goal: prevent false `health:timeout` disconnects during active screenshot/transfer data flow.

@@ -31,7 +31,8 @@ let healthTimer = null;
 let healthState = {
   misses: 0,
   pendingPingResolve: null,
-  suspendedUntil: 0
+  suspendedUntil: 0,
+  lastActivityAt: 0
 };
 
 function appendLog(line) {
@@ -117,12 +118,24 @@ function waitForHealthAck() {
   });
 }
 
+function markBridgeActivity(reason = 'activity') {
+  healthState.lastActivityAt = Date.now();
+  if (healthState.pendingPingResolve) {
+    healthState.pendingPingResolve(true);
+  }
+  debugLog('health activity', { reason });
+}
+
 function noteControlFrameForHealth(unwrapped) {
   if (!unwrapped) return;
+  markBridgeActivity(unwrapped.type || 'ctrl_frame');
   if (unwrapped.type === 'dom.snapshot.request') {
     healthState.suspendedUntil = Math.max(healthState.suspendedUntil, Date.now() + kHealthSuspendMsDom);
   } else if (unwrapped.type === 'screenshot.request') {
     healthState.suspendedUntil = Math.max(healthState.suspendedUntil, Date.now() + kHealthSuspendMsScreenshot);
+  } else if (typeof unwrapped.type === 'string' && unwrapped.type.startsWith('transfer.')) {
+    // Active transfer frames are proof-of-life; avoid watchdog false positives.
+    healthState.suspendedUntil = Math.max(healthState.suspendedUntil, Date.now() + kHealthPingIntervalMs);
   }
   if (!healthState.pendingPingResolve) return;
   if (unwrapped.type === 'state' || typeof unwrapped.ok === 'boolean') {
@@ -134,6 +147,10 @@ function startHealthWatchdog() {
   stopHealthWatchdog();
   healthTimer = setInterval(async () => {
     if (Date.now() < healthState.suspendedUntil) {
+      return;
+    }
+    if (Date.now() - healthState.lastActivityAt < kHealthPingIntervalMs * 2) {
+      healthState.misses = 0;
       return;
     }
     const info = getConnectedDeviceInfo();
@@ -362,6 +379,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     type: msg?.payload?.type,
     bytes: JSON.stringify(msg?.payload || {}).length
   });
+  if (msg?.payload?.type) {
+    markBridgeActivity(`sw_post:${msg.payload.type}`);
+  } else {
+    markBridgeActivity('sw_post');
+  }
   postEvent(msg.payload, { traceId: msg.traceId || null })
     .then((ok) => {
       debugLog('ble.post result', { traceId: msg.traceId || null, ok });
