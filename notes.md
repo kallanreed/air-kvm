@@ -98,3 +98,11 @@ Read all the "docs/*.md" so you understand the goals of the project.
   - `cd extension && node --test` pass
   - `cd firmware && pio test -e native` pass
 - Remaining: live E2E retry/resume validation under real loss/timeout conditions.
+
+## March 8, 2026 - Deterministic Binary Transfer Progress
+- Extension transfer sender no longer relies on time-based chunk delays.
+- Sender now uses ACK-window gating (`window=8`) and only advances when MCP reports `highest_contiguous_seq`.
+- `transfer.resume` resets sender cursor to requested `from_seq` and replays deterministically.
+- `transfer.nack` resends only the requested sequence, then continues gated pumping.
+- `transfer.meta` and `transfer.done` are now hard-fail sends (throw on bridge post failure).
+- MCP UART collector null-message guard was tightened so only JSON ctrl/bin frames hit screenshot collector paths.

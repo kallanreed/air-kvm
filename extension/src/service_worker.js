@@ -4,6 +4,7 @@ const kBleBridgePagePath = 'src/ble_bridge.html';
 const kDebug = true;
 const kScreenshotCaptureTimeoutMs = 25000;
 const kScreenshotStageTimeoutMs = 10000;
+const kTransferAckWindow = 8;
 const kTransferTtlMs = 2 * 60 * 1000;
 const kSwHeartbeatIntervalMs = 5000;
 const kSwBreadcrumbStorageKey = 'airkvm_sw_breadcrumb';
@@ -165,6 +166,13 @@ async function postEventViaBridge(payload) {
   }
 }
 
+async function postEventOrThrow(payload, errorCode = 'bridge_post_failed') {
+  const ok = await postEventViaBridge(payload);
+  if (!ok) {
+    throw new Error(errorCode);
+  }
+}
+
 async function postBinaryViaBridge(bytes) {
   bridgeTraceSeq += 1;
   const traceId = `sw-${Date.now()}-${bridgeTraceSeq}`;
@@ -239,6 +247,57 @@ function withTimeout(promise, ms, errorCode) {
   return Promise.race([promise, timeoutPromise]).finally(() => {
     if (timeoutId !== null) clearTimeout(timeoutId);
   });
+}
+
+async function postBinaryOrThrow(bytes) {
+  const ok = await postBinaryViaBridge(bytes);
+  if (!ok) {
+    throw new Error('binary_send_failed');
+  }
+}
+
+async function pumpTransferSession(session) {
+  if (!session) return;
+  if (session.sending) {
+    session.pumpRequested = true;
+    return;
+  }
+  session.sending = true;
+  try {
+    while (session.nextSeqToSend < session.totalChunks) {
+      const maxAllowedSeq = session.highestAckSeq + kTransferAckWindow;
+      if (session.nextSeqToSend > maxAllowedSeq) {
+        break;
+      }
+      const frame = session.framesBySeq.get(session.nextSeqToSend);
+      session.nextSeqToSend += 1;
+      if (!frame) continue;
+      await postBinaryOrThrow(frame);
+      session.updatedAt = Date.now();
+    }
+    if (session.nextSeqToSend >= session.totalChunks && !session.doneSent) {
+      await postEventOrThrow({
+        type: 'transfer.done',
+        request_id: session.requestId,
+        transfer_id: session.transferId,
+        source: session.source,
+        total_chunks: session.totalChunks
+      }, 'transfer_done_send_failed');
+      session.doneSent = true;
+      session.updatedAt = Date.now();
+      debugLog('transfer done sent', {
+        requestId: session.requestId,
+        transferId: session.transferId,
+        highestAckSeq: session.highestAckSeq
+      });
+    }
+  } finally {
+    session.sending = false;
+    if (session.pumpRequested) {
+      session.pumpRequested = false;
+      await pumpTransferSession(session);
+    }
+  }
 }
 
 async function captureTabPng(config) {
@@ -438,7 +497,11 @@ async function sendScreenshot(command) {
       framesBySeq,
       totalChunks: chunks.length,
       updatedAt: Date.now(),
-      highestAckSeq: -1
+      highestAckSeq: -1,
+      nextSeqToSend: 0,
+      doneSent: false,
+      sending: false,
+      pumpRequested: false
     };
     screenshotTransfers.set(transferId, session);
     debugLog('transfer session created', {
@@ -452,22 +515,16 @@ async function sendScreenshot(command) {
       total_chunks: chunks.length
     });
 
-    await postEventViaBridge({
+    await postEventOrThrow({
       type: 'transfer.meta',
       ...meta
+    }, 'transfer_meta_send_failed');
+    debugLog('transfer window start', {
+      requestId,
+      transferId,
+      window: kTransferAckWindow
     });
-    for (const chunk of chunks) {
-      const frame = framesBySeq.get(chunk.seq);
-      if (!frame) continue;
-      await postBinaryViaBridge(frame);
-    }
-    await postEventViaBridge({
-      type: 'transfer.done',
-      request_id: requestId,
-      transfer_id: transferId,
-      source,
-      total_chunks: chunks.length
-    });
+    await pumpTransferSession(session);
   } finally {
     screenshotInFlight = false;
   }
@@ -511,6 +568,8 @@ async function handleTransferResume(command) {
   const fromSeq = Number.isInteger(command?.from_seq)
     ? Math.max(0, command.from_seq)
     : Math.max(0, session.highestAckSeq + 1);
+  session.nextSeqToSend = fromSeq;
+  session.doneSent = false;
   session.updatedAt = Date.now();
   debugLog('transfer resume start', {
     requestId: session.requestId,
@@ -523,18 +582,7 @@ async function handleTransferResume(command) {
     transfer_id: session.transferId,
     from_seq: fromSeq
   });
-  for (let seq = fromSeq; seq < session.totalChunks; seq += 1) {
-    const frame = session.framesBySeq.get(seq);
-    if (!frame) continue;
-    await postBinaryViaBridge(frame);
-  }
-  await postEventViaBridge({
-    type: 'transfer.done',
-    request_id: session.requestId,
-    transfer_id: session.transferId,
-    source: session.source,
-    total_chunks: session.totalChunks
-  });
+  await pumpTransferSession(session);
 }
 
 async function handleTransferAck(command) {
@@ -554,6 +602,7 @@ async function handleTransferAck(command) {
     transfer_id: session.transferId,
     highest_contiguous_seq: session.highestAckSeq
   });
+  await pumpTransferSession(session);
 }
 
 async function handleTransferDoneAck(command) {
@@ -599,7 +648,8 @@ async function handleTransferNack(command) {
     transferId,
     seq
   });
-  await postBinaryViaBridge(frame);
+  await postBinaryOrThrow(frame);
+  await pumpTransferSession(session);
 }
 
 async function handleTransferCancel(command) {

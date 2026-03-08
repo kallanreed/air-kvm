@@ -290,3 +290,19 @@
   - Local validation after mitigation:
     - `cd firmware && pio test -e native` pass
     - `cd firmware && pio run -e esp32dev` pass
+- Deterministic binary transfer flow-control hardening (March 8, 2026, late):
+  - Root issue: extension could blast all binary chunks before MCP ACK progression, then send `transfer.done`; on loss, MCP stalled at partial contiguous seq and timed out.
+  - Extension service worker now uses explicit ACK-window flow control:
+    - added `kTransferAckWindow = 8`
+    - sends only up to `highestAckSeq + window`
+    - advances transmission on `transfer.ack`
+    - supports deterministic restart from `transfer.resume` by resetting `nextSeqToSend`
+    - still retransmits exact chunk on `transfer.nack`
+  - Removed delay-based pacing approach; transfer progression is now receiver-driven instead of timer-driven.
+  - Control-plane send hardening:
+    - `transfer.meta` and `transfer.done` now use `postEventOrThrow` to fail explicitly if bridge post fails.
+  - Regression guard:
+    - MCP UART collector invocation now only triggers on JSON control frames or binary frame kinds (`bin`, `bin_error`) to avoid null-message crashes in non-screenshot flows.
+  - Validation:
+    - `cd extension && node --test` pass
+    - `cd mcp && node --test` pass

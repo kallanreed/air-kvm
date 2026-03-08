@@ -221,7 +221,12 @@ export class UartTransport {
           onFrame: (frame) => {
             frames.push(frame);
             const msg = frame.kind === 'ctrl' || frame.kind === 'legacy_ctrl' ? frame.msg : null;
-            if (responseCollector) {
+            const shouldCallCollector = Boolean(
+              msg ||
+              frame.kind === 'bin' ||
+              frame.kind === 'bin_error'
+            );
+            if (responseCollector && shouldCallCollector) {
               const collected = responseCollector(msg, frame, frames);
               if (collected?.done) {
                 if (Array.isArray(collected.outbound) && collected.outbound.length > 0) {

@@ -80,3 +80,13 @@ Stabilize screenshot transfer reliability end-to-end by upgrading from fire-and-
 1. Fix incomplete screenshot stream completion (meta/chunks seen, MCP timeout).
 2. Land transfer reliability protocol with retransmit support.
 3. Re-run live `airkvm_screenshot_tab` validation for both `b64` and `b64z`.
+
+## March 8, 2026 - Deterministic Binary Transfer Workstream
+1. [x] Replace delay-based binary sender pacing in extension SW with ACK-window pump (`highestAckSeq + window`).
+2. [x] Ensure `transfer.resume` rewinds sender cursor and replays deterministically.
+3. [x] Ensure `transfer.nack` resends exact seq and keeps transfer pump active.
+4. [x] Harden control-plane send guarantees for `transfer.meta` and `transfer.done` (throw on failed bridge post).
+5. [x] Run unit tests:
+   - `cd extension && node --test`
+   - `cd mcp && node --test`
+6. [ ] Live validation with repeated `airkvm_screenshot_tab` binary captures and verify timeout regression is gone.
