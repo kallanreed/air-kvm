@@ -1,6 +1,7 @@
 #include "transport_mux.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -42,7 +43,9 @@ void TransportMux::Begin() {
 #if defined(ESP32)
   if (tx_queue_ != nullptr) return;
   tx_queue_ = static_cast<void*>(xQueueCreate(128, sizeof(TxFrame)));
-  if (tx_queue_ == nullptr) return;
+  if (tx_queue_ == nullptr) {
+    abort();
+  }
   xTaskCreatePinnedToCore(
       &TransportMux::TxTaskMain,
       "airkvm_tx",

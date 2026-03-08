@@ -111,3 +111,8 @@ Read all the "docs/*.md" so you understand the goals of the project.
 - Added optional `desktop_delay_ms` hint on desktop screenshot requests to avoid capturing the permission-sheet animation.
 - Delay is now forwarded MCP -> extension service worker -> bridge desktop capture route.
 - Bridge applies bounded delay (`0..5000ms`) after permission grant and before first frame grab.
+
+## March 8, 2026 - Fail-Fast Policy
+- Policy clarified: fail-fast is mandatory; no recovery/fallback branches for core transport init failures.
+- Firmware transport TX queue init now fails hard (`abort()`) if queue allocation fails.
+- Rationale: deterministic behavior over hidden degraded modes; reduce state-space and debugging ambiguity.
