@@ -119,6 +119,9 @@
   - Bug fix: encoding label now reflects actual payload mode.
     - If gzip API is unavailable or gzip is not smaller, extension now falls back to `b64` and marks meta as `e: "b64"`.
     - Prevents mismatched `b64z` metadata for non-gzipped payloads.
+  - Stability fix: compression timeout guard.
+    - Wrapped `CompressionStream` path in a short timeout and guaranteed fallback to `b64` on timeout/error.
+    - Prevents `b64z` requests from hanging screenshot flow when gzip stream stalls in service worker context.
 - Bridge health watchdog:
   - Added periodic BLE health ping (`state.request`) in bridge page.
   - If ping ACKs fail consecutively (`kHealthMaxMisses`), bridge now auto-disconnects and updates status.

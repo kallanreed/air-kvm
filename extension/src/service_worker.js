@@ -302,6 +302,25 @@ async function tryGzipDataUrlBase64(dataUrl) {
   if (typeof CompressionStream !== 'function') {
     return { encoding: 'b64', payloadBase64: null };
   }
+  try {
+    const zippedBase64 = await Promise.race([
+      gzipBytesToBase64(bytes),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('compression_timeout')), 3000);
+      })
+    ]);
+    if (typeof zippedBase64 !== 'string' || zippedBase64.length >= base64.length) {
+      // Do not claim compressed mode when compression failed or did not reduce payload size.
+      return { encoding: 'b64', payloadBase64: null };
+    }
+    return { encoding: 'b64z', payloadBase64: zippedBase64 };
+  } catch {
+    // Compression path is optional; always preserve screenshot flow via b64 fallback.
+    return { encoding: 'b64', payloadBase64: null };
+  }
+}
+
+async function gzipBytesToBase64(bytes) {
   const cs = new CompressionStream('gzip');
   const writer = cs.writable.getWriter();
   await writer.write(bytes);
@@ -312,12 +331,7 @@ async function tryGzipDataUrlBase64(dataUrl) {
   for (let i = 0; i < zipped.length; i += 1) {
     binary += String.fromCharCode(zipped[i]);
   }
-  const zippedBase64 = btoa(binary);
-  if (zippedBase64.length >= base64.length) {
-    // Do not claim compressed mode when it does not reduce payload size.
-    return { encoding: 'b64', payloadBase64: null };
-  }
-  return { encoding: 'b64z', payloadBase64: zippedBase64 };
+  return btoa(binary);
 }
 
 async function sendTabsList(command) {
