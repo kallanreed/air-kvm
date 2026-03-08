@@ -207,3 +207,7 @@
   - Added `INVESTIGATOR` role as mandatory for unclear failures.
   - Investigator gate requires evidence-first root-cause analysis (logs/traces/code-path proof/disproof), not speculative explanations.
   - Persisted in `manager_plan.md` and `notes.md` so future runs enforce root-cause accountability.
+- UART noise reduction (March 7, 2026, investigator action):
+  - Stopped mirroring BLE ingress payload logs (`rx.ble ...`) to UART in `CommandRouter::ProcessLine`.
+  - Rationale: BLE command echo on UART created heavy log noise and increased risk of framing interleaving/parse confusion during screenshot transfers.
+  - Validation: `cd firmware && pio test -e native` pass.

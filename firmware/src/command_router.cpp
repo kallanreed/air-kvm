@@ -15,7 +15,11 @@ void CommandRouter::ProcessLine(const String& line, const char* source) {
     return;
   }
 
-  transport_.EmitLog(String("rx.") + source + " " + line);
+  // Avoid echoing BLE ingress payloads onto UART logs; this stream is for host-side
+  // control framing and diagnostics, and BLE command mirroring adds noise/interleaving risk.
+  if (source != nullptr && String(source) != "ble") {
+    transport_.EmitLog(String("rx.") + source + " " + line);
+  }
   const auto cmd = airkvm::ParseCommandLine(line.c_str());
   if (!cmd.has_value()) {
     transport_.EmitControl("{\"ok\":false,\"error\":\"invalid_command\"}");
