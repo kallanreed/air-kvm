@@ -28,11 +28,20 @@
         font-size: 12px;
         line-height: 1.35;
         height: 220px;
+        min-height: 120px;
+        max-height: 75vh;
+        resize: vertical;
         overflow: auto;
         white-space: pre-wrap;
       }
       #log-controls {
         margin-top: 10px;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+      #toggle-autoscroll {
+        padding: 6px 10px;
       }
     </style>
   </head>
@@ -48,6 +57,7 @@
     <div id="status">Disconnected</div>
     <div id="log-controls">
       <button id="clear-log">Clear Log</button>
+      <button id="toggle-autoscroll" aria-pressed="true">Auto-scroll: ON</button>
     </div>
     <div id="log"></div>
     <script type="module" src="./ble_bridge.js"></script>

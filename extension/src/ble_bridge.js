@@ -14,6 +14,7 @@ const disconnectBtn = document.getElementById('disconnect');
 const forgetBtn = document.getElementById('forget');
 const reconnectBtn = document.getElementById('reconnect');
 const clearLogBtn = document.getElementById('clear-log');
+const toggleAutoscrollBtn = document.getElementById('toggle-autoscroll');
 const logEl = document.getElementById('log');
 const kDebug = true;
 const kHandshakeTimeoutMs = 6000;
@@ -36,6 +37,13 @@ let healthState = {
   lastActivityAt: 0
 };
 let lastSwInstanceId = null;
+let autoScrollEnabled = true;
+
+function refreshAutoscrollButton() {
+  if (!toggleAutoscrollBtn) return;
+  toggleAutoscrollBtn.textContent = `Auto-scroll: ${autoScrollEnabled ? 'ON' : 'OFF'}`;
+  toggleAutoscrollBtn.setAttribute('aria-pressed', autoScrollEnabled ? 'true' : 'false');
+}
 
 function appendLog(line) {
   if (!logEl) return;
@@ -47,7 +55,7 @@ function appendLog(line) {
     logLines = logLines.slice(logLines.length - kMaxLogLines);
   }
   logEl.textContent = logLines.join('\n');
-  if (wasNearBottom) {
+  if (autoScrollEnabled && wasNearBottom) {
     logEl.scrollTop = logEl.scrollHeight;
   }
 }
@@ -369,8 +377,14 @@ clearLogBtn?.addEventListener('click', () => {
   if (logEl) logEl.textContent = '';
 });
 
+toggleAutoscrollBtn?.addEventListener('click', () => {
+  autoScrollEnabled = !autoScrollEnabled;
+  refreshAutoscrollButton();
+});
+
 notifySw('bridge_loaded');
 debugLog('bridge_loaded');
+refreshAutoscrollButton();
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'ble.sw.alive' && msg.target === 'ble-page') {
