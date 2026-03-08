@@ -14,15 +14,31 @@
 6. `MANAGER` approves commit only after all `critical/high` findings are fixed or explicitly waived.
 
 ## Objective
-Implement Milestone A from `docs/plan.md`: ESP32 advertises BLE HID (HOGP) and command path can inject keyboard/mouse input.
+Stabilize screenshot transfer reliability end-to-end by upgrading from fire-and-forget chunks to resumable transfer sessions (`transfer_id` + ACK/resume/cancel/reset).
 
 ## Steps
-1. [x] Read `docs/*.md` and extract goals/current blockers.
-2. [x] Verify firmware dependency surface for HID APIs.
-3. [x] Add HID controller setup/report map and integrate into app boot.
-4. [x] Route command handlers (`mouse.move_rel`, `mouse.click`, `key.tap`) to HID report sends.
-5. [x] Run `pio test -e native` and `pio run -e esp32dev`.
-6. [x] Document remaining live macOS validation steps.
+1. [x] Define protocol additions and message shapes:
+   - `transfer.meta` / `transfer.chunk`
+   - `transfer.ack` / `transfer.resume`
+   - `transfer.cancel` / `transfer.reset`
+   - `transfer.done` / `transfer.done.ack`
+   - `transfer.error` with `code: "no_such_transfer"` for missing session resume.
+2. [x] Implement MCP screenshot collector/session logic:
+   - Track active `transfer_id`.
+   - Send `transfer.ack` with highest contiguous seq.
+   - Send `transfer.resume` on gaps/timeouts.
+   - Treat `no_such_transfer` as hard restart (new screenshot request).
+3. [x] Implement extension transfer session store in bridge page:
+   - Keep encoded payload by `transfer_id` until done/cancel/reset/TTL expiry.
+   - Support resume from `from_seq`.
+   - Support reset to clear all transfer state.
+4. [x] Wire firmware pass-through for new transfer control message types.
+5. [x] Add/expand tests in `mcp`, `extension`, and `firmware` for:
+   - missing-session resume -> `no_such_transfer`
+   - retransmit from gap
+   - cancel/reset cleanup
+   - done handshake completion.
+6. [ ] Run focused checks and live validation, then tune defaults.
 
 ## Notes
 - Keep existing custom BLE UART service available while introducing HID, per current transition plan.
@@ -49,11 +65,7 @@ Implement Milestone A from `docs/plan.md`: ESP32 advertises BLE HID (HOGP) and c
    - `{"type":"mouse.click","button":"left"}`
 7. Confirm target machine receives input events (cursor moves, click fires, Enter key injected).
 
-## Remaining work (hardware E2E only)
-1. DOM snapshot E2E is complete; validate real screenshot retrieval latency/size on target machine for:
-   - `airkvm_screenshot_tab` default config
-   - `airkvm_screenshot_desktop` default config
-   - one tuned request (`max_width`, `max_height`, `quality`, `max_chars`)
-2. Validate desktop permission-denied UX and confirm structured MCP error payloads in live flow.
-3. Validate oversized screenshot behavior in live flow (`screenshot_too_large`) and confirm no hangs.
-4. Measure and record successful end-to-end timings and payload sizes for final default tuning.
+## Current Priority
+1. Fix incomplete screenshot stream completion (meta/chunks seen, MCP timeout).
+2. Land transfer reliability protocol with retransmit support.
+3. Re-run live `airkvm_screenshot_tab` validation for both `b64` and `b64z`.

@@ -73,3 +73,19 @@ WORKER:
 Do not skip the planning phase.
 Do not implement multiple steps at once.
 Read all the "docs/*.md" so you understand the goals of the project.
+
+## March 7, 2026 - Reliable Screenshot Transfer (In Progress)
+- Added transfer-session protocol scaffolding with explicit `transfer_id` flow.
+- MCP now supports `transfer.*` frames and emits:
+  - `transfer.ack` (highest contiguous seq)
+  - `transfer.resume` on timeout
+  - handles `transfer.error` (`no_such_transfer` surfaced as structured tool error)
+- Extension service worker now stores screenshot transfer sessions in-memory (TTL-pruned) and handles:
+  - `transfer.resume`, `transfer.ack`, `transfer.done.ack`, `transfer.cancel`, `transfer.reset`
+  - returns `transfer.error` when resume/ack/cancel references missing transfer (`no_such_transfer`)
+- Firmware now passes through `transfer.*` command types over control channel.
+- Validation so far:
+  - `cd mcp && node --test` pass
+  - `cd extension && node --test` pass
+  - `cd firmware && pio test -e native` pass
+- Remaining: live E2E retry/resume validation under real loss/timeout conditions.

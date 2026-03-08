@@ -64,6 +64,15 @@ void test_parse_tabs_list_request() {
   TEST_ASSERT_EQUAL_STRING("tabs-1", cmd->request_id.c_str());
 }
 
+void test_parse_transfer_resume() {
+  const auto cmd = airkvm::ParseCommandLine(
+      "{\"type\":\"transfer.resume\",\"request_id\":\"shot-1\",\"transfer_id\":\"tx-1\",\"from_seq\":10}");
+  TEST_ASSERT_TRUE(cmd.has_value());
+  TEST_ASSERT_EQUAL_INT(
+      static_cast<int>(airkvm::CommandType::kTransferResume), static_cast<int>(cmd->type));
+  TEST_ASSERT_EQUAL_STRING("shot-1", cmd->request_id.c_str());
+}
+
 void test_ack_json_ok() {
   const auto s = airkvm::AckJson("abc", true);
   TEST_ASSERT_EQUAL_STRING("{\"id\":\"abc\",\"ok\":true}", s.c_str());
@@ -79,6 +88,7 @@ int main(int, char**) {
   RUN_TEST(test_parse_dom_snapshot_request);
   RUN_TEST(test_parse_screenshot_chunk);
   RUN_TEST(test_parse_tabs_list_request);
+  RUN_TEST(test_parse_transfer_resume);
   RUN_TEST(test_ack_json_ok);
   return UNITY_END();
 }

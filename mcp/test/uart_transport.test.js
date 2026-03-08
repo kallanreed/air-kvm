@@ -84,3 +84,52 @@ test('sendCommand with collector ignores generic ack and resolves on matching pa
   assert.equal(result.data.snapshot.type, 'dom.snapshot');
   transport.close();
 });
+
+test('sendCommand forwards collector outbound commands and completes', async () => {
+  const writes = [];
+  const transport = new UartTransport({
+    portPath: 'TEST_PORT',
+    baudRate: 115200,
+    commandTimeoutMs: 200
+  });
+  transport.open = async function openStub() {
+    this.opened = true;
+    this.serialPort = {
+      write: (line, cb) => {
+        writes.push(String(line).trim());
+        cb();
+      },
+      drain: (cb) => cb(),
+      isOpen: false,
+      close: (cb) => cb?.()
+    };
+  };
+
+  const pending = transport.sendCommand(
+    { type: 'screenshot.request', request_id: 'r-out', source: 'tab' },
+    (msg) => {
+      if (msg.type === 'transfer.chunk') {
+        return {
+          done: false,
+          outbound: [{ type: 'transfer.ack', request_id: 'r-out', transfer_id: 'tx-1', highest_contiguous_seq: 0 }],
+          extendTimeoutMs: 200
+        };
+      }
+      if (msg.type === 'transfer.done') {
+        return { done: true, ok: true, data: { request_id: 'r-out' } };
+      }
+      return null;
+    }
+  );
+
+  setTimeout(() => {
+    transport.onData(Buffer.from('{"ch":"ctrl","msg":{"type":"transfer.chunk","request_id":"r-out","transfer_id":"tx-1","seq":0,"data":"AAA"}}\n', 'utf8'));
+    transport.onData(Buffer.from('{"ch":"ctrl","msg":{"type":"transfer.done","request_id":"r-out","transfer_id":"tx-1"}}\n', 'utf8'));
+  }, 10);
+
+  const result = await pending;
+  assert.equal(result.ok, true);
+  assert.equal(result.data.request_id, 'r-out');
+  assert.equal(writes.some((line) => line.includes('"type":"transfer.ack"')), true);
+  transport.close();
+});

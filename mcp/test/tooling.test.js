@@ -159,3 +159,89 @@ test('screenshot collector decodes b64z payload back to base64 image', () => {
   assert.equal(done.data.encoding, 'b64z');
   assert.equal(done.data.base64, imageBytes.toString('base64'));
 });
+
+test('screenshot collector supports transfer.* frames and emits done ack', () => {
+  const command = { type: 'screenshot.request', source: 'tab', request_id: 'shot-transfer' };
+  const collect = createResponseCollector('airkvm_screenshot_tab', command);
+
+  assert.equal(
+    collect({
+      type: 'transfer.meta',
+      request_id: 'shot-transfer',
+      transfer_id: 'tx-1',
+      source: 'tab',
+      mime: 'image/jpeg',
+      total_chunks: 2,
+      total_chars: 6
+    }),
+    null
+  );
+  assert.equal(
+    collect({
+      type: 'transfer.chunk',
+      request_id: 'shot-transfer',
+      transfer_id: 'tx-1',
+      source: 'tab',
+      seq: 0,
+      data: 'ABC'
+    }),
+    null
+  );
+  const done = collect({
+    type: 'transfer.chunk',
+    request_id: 'shot-transfer',
+    transfer_id: 'tx-1',
+    source: 'tab',
+    seq: 1,
+    data: 'DEF'
+  });
+  assert.equal(done.done, true);
+  assert.equal(done.ok, true);
+  assert.equal(done.data.base64, 'ABCDEF');
+  assert.equal(Array.isArray(done.outbound), true);
+  assert.equal(done.outbound[0].type, 'transfer.done.ack');
+  assert.equal(done.outbound[0].transfer_id, 'tx-1');
+});
+
+test('screenshot collector timeout handler emits transfer.resume', () => {
+  const command = { type: 'screenshot.request', source: 'tab', request_id: 'shot-resume' };
+  const collect = createResponseCollector('airkvm_screenshot_tab', command);
+
+  collect({
+    type: 'transfer.meta',
+    request_id: 'shot-resume',
+    transfer_id: 'tx-resume',
+    source: 'tab',
+    total_chunks: 3
+  });
+  collect({
+    type: 'transfer.chunk',
+    request_id: 'shot-resume',
+    transfer_id: 'tx-resume',
+    source: 'tab',
+    seq: 0,
+    data: 'AAA'
+  });
+  const timed = collect.onTimeout();
+  assert.equal(timed.done, false);
+  assert.equal(timed.outbound[0].type, 'transfer.resume');
+  assert.equal(timed.outbound[0].transfer_id, 'tx-resume');
+  assert.equal(timed.outbound[0].from_seq, 1);
+});
+
+test('transfer no_such_transfer surfaces structured error', () => {
+  const command = { type: 'screenshot.request', source: 'tab', request_id: 'shot-no-such' };
+  const collect = createResponseCollector('airkvm_screenshot_tab', command);
+
+  const done = collect({
+    type: 'transfer.error',
+    request_id: 'shot-no-such',
+    source: 'tab',
+    code: 'no_such_transfer',
+    transfer_id: 'tx-gone'
+  });
+
+  assert.equal(done.done, true);
+  assert.equal(done.ok, false);
+  assert.equal(done.data.error, 'no_such_transfer');
+});

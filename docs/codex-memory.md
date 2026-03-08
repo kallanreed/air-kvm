@@ -163,3 +163,22 @@
     - `screenshot_encode_timeout`
   - Goal: convert silent/long hangs into explicit error frames and prevent request pileups.
   - Verification: `cd extension && node --test`; `cd mcp && node --test test/server.test.js test/tools.test.js` both pass.
+- Reliable screenshot transfer protocol scaffolding (March 7, 2026, evening):
+  - MCP collector upgraded for transfer-session frames:
+    - consumes `transfer.meta` / `transfer.chunk` / `transfer.done` / `transfer.error`
+    - emits `transfer.ack` (highest contiguous seq) while receiving chunks
+    - uses collector timeout hook to emit `transfer.resume` from next missing seq
+    - emits structured error for `transfer.error` (notably `no_such_transfer`)
+    - keeps backward compatibility with legacy `screenshot.meta` / `screenshot.chunk`.
+  - UART transport upgraded for collector-driven outbound control:
+    - collector can now return `outbound` commands that are transmitted during in-flight command handling
+    - collector can extend command timeout (`extendTimeoutMs`) and run `onTimeout` retry logic.
+  - Extension service worker now supports transfer session state:
+    - stores screenshot payload chunks by `transfer_id` (in-memory map, TTL-pruned)
+    - responds to `transfer.resume`, `transfer.ack`, `transfer.done.ack`, `transfer.cancel`, `transfer.reset`
+    - returns `transfer.error` with `code: no_such_transfer` when session missing.
+  - Firmware pass-through extended for all `transfer.*` types so control frames traverse UART/BLE unchanged.
+  - Test status after changes:
+    - `cd mcp && node --test` => pass
+    - `cd extension && node --test` => pass
+    - `cd firmware && pio test -e native` => pass

@@ -36,6 +36,7 @@ export class UartTransport {
     this.currentWaiter = null;
     this.sendQueue = Promise.resolve();
     this.opened = false;
+    this.recentFrames = [];
   }
 
   async open() {
@@ -81,6 +82,10 @@ export class UartTransport {
   onLine(line) {
     this.log(`rx line=${line}`);
     const frame = parseDeviceLine(line);
+    this.recentFrames.push(frame);
+    if (this.recentFrames.length > 200) {
+      this.recentFrames.shift();
+    }
     if (this.currentWaiter) {
       this.currentWaiter.onFrame(frame);
     }
@@ -105,26 +110,84 @@ export class UartTransport {
     const run = async () => {
       await this.open();
 
-      const line = `${JSON.stringify(command)}\n`;
-      this.log(`tx line=${line.trim()}`);
-      await new Promise((resolve, reject) => {
-        this.serialPort.write(line, (err) => {
-          if (err) reject(err);
-          else this.serialPort.drain((drainErr) => (drainErr ? reject(drainErr) : resolve()));
+      const writeRawCommand = async (cmd) => {
+        const line = `${JSON.stringify(cmd)}\n`;
+        this.log(`tx line=${line.trim()}`);
+        await new Promise((resolve, reject) => {
+          this.serialPort.write(line, (err) => {
+            if (err) reject(err);
+            else this.serialPort.drain((drainErr) => (drainErr ? reject(drainErr) : resolve()));
+          });
         });
-      });
+      };
+
+      await writeRawCommand(command);
 
       return new Promise((resolve, reject) => {
         const frames = [];
+        let timer = null;
+        let waiterClosed = false;
+        let controlWriteQueue = Promise.resolve();
+
+        const queueCollectorCommands = (commands) => {
+          if (!Array.isArray(commands) || commands.length === 0) return;
+          for (const outbound of commands) {
+            controlWriteQueue = controlWriteQueue
+              .then(() => writeRawCommand(outbound))
+              .catch((err) => {
+                this.log(`collector tx error: ${err?.message || err}`);
+              });
+          }
+        };
+
+        const armTimer = (ms = this.commandTimeoutMs) => {
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(() => {
+            if (waiterClosed) return;
+            if (typeof responseCollector?.onTimeout === 'function') {
+              const timed = responseCollector.onTimeout(frames);
+              if (timed) {
+                if (Array.isArray(timed.outbound) && timed.outbound.length > 0) {
+                  queueCollectorCommands(timed.outbound);
+                }
+                if (timed.done) {
+                  if (typeof timed.ok === 'boolean' && timed.ok === false) {
+                    finish(resolve, {
+                      ok: false,
+                      msg: timed.msg ?? null,
+                      frames,
+                      data: timed.data
+                    });
+                    return;
+                  }
+                  finish(resolve, {
+                    ok: true,
+                    msg: timed.msg ?? null,
+                    frames,
+                    data: timed.data
+                  });
+                  return;
+                }
+                armTimer(Number.isInteger(timed.extendTimeoutMs) ? timed.extendTimeoutMs : this.commandTimeoutMs);
+                return;
+              }
+            }
+            this.log(`timeout command=${JSON.stringify(command)} frames=${JSON.stringify(frames)}`);
+            const err = new Error('device_timeout');
+            err.frames = frames;
+            err.recentFrames = this.recentFrames.slice(-50);
+            finish(reject, err);
+          }, ms);
+        };
+
         const finish = (fn, value) => {
-          clearTimeout(timer);
+          if (waiterClosed) return;
+          waiterClosed = true;
+          if (timer) clearTimeout(timer);
           this.currentWaiter = null;
           fn(value);
         };
-        const timer = setTimeout(() => {
-          this.log(`timeout command=${JSON.stringify(command)} frames=${JSON.stringify(frames)}`);
-          finish(reject, new Error('device_timeout'));
-        }, this.commandTimeoutMs);
+        armTimer(this.commandTimeoutMs);
 
         this.currentWaiter = {
           reject,
@@ -134,6 +197,9 @@ export class UartTransport {
             if (responseCollector && msg) {
               const collected = responseCollector(msg, frame, frames);
               if (collected?.done) {
+                if (Array.isArray(collected.outbound) && collected.outbound.length > 0) {
+                  queueCollectorCommands(collected.outbound);
+                }
                 finish(resolve, {
                   ok: typeof collected.ok === 'boolean' ? collected.ok : true,
                   msg: collected.msg ?? msg,
@@ -141,6 +207,15 @@ export class UartTransport {
                   data: collected.data
                 });
                 return;
+              }
+              if (Array.isArray(collected?.outbound) && collected.outbound.length > 0) {
+                queueCollectorCommands(collected.outbound);
+              }
+              if (Number.isInteger(collected?.extendTimeoutMs)) {
+                armTimer(collected.extendTimeoutMs);
+              } else if (collected) {
+                // A collector match indicates progress; keep wait alive.
+                armTimer(this.commandTimeoutMs);
               }
             }
             if (!responseCollector && this.shouldResolveForCommand(command, msg)) {

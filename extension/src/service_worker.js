@@ -3,9 +3,11 @@ const kBleBridgePagePath = 'src/ble_bridge.html';
 const kDebug = true;
 const kScreenshotCaptureTimeoutMs = 25000;
 const kScreenshotStageTimeoutMs = 10000;
+const kTransferTtlMs = 2 * 60 * 1000;
 let lastAutomationTabId = null;
 let bridgeTraceSeq = 0;
 let screenshotInFlight = false;
+const screenshotTransfers = new Map();
 
 function debugLog(...args) {
   if (!kDebug) return;
@@ -141,6 +143,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 function makeRequestId() {
   return `${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
+}
+
+function makeTransferId() {
+  return `tx_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
+}
+
+function pruneScreenshotTransfers(nowTs = Date.now()) {
+  for (const [transferId, session] of screenshotTransfers.entries()) {
+    if (!session || nowTs - (session.updatedAt || 0) > kTransferTtlMs) {
+      screenshotTransfers.delete(transferId);
+    }
+  }
 }
 
 function withTimeout(promise, ms, errorCode) {
@@ -332,14 +346,140 @@ async function sendScreenshot(command) {
       chunks: chunks.length,
       totalChars: meta.tch
     });
-    await postEventViaBridge(meta);
+    pruneScreenshotTransfers();
+    const transferId = makeTransferId();
+    const session = {
+      transferId,
+      requestId,
+      source,
+      meta,
+      chunks,
+      updatedAt: Date.now(),
+      highestAckSeq: -1
+    };
+    screenshotTransfers.set(transferId, session);
+
+    await postEventViaBridge({
+      type: 'transfer.meta',
+      request_id: requestId,
+      transfer_id: transferId,
+      source,
+      mime: meta.m,
+      encoding: meta.e,
+      chunk_size: meta.cs,
+      total_chunks: meta.tc,
+      total_chars: meta.tch,
+      encoded_width: meta.ew,
+      encoded_height: meta.eh,
+      encoded_quality: meta.eq,
+      encode_attempts: meta.ea
+    });
     for (const chunk of chunks) {
-      // BLE payloads are chunked to reduce risk of exceeding negotiated MTU.
-      await postEventViaBridge(chunk);
+      await postEventViaBridge({
+        type: 'transfer.chunk',
+        request_id: requestId,
+        transfer_id: transferId,
+        source,
+        seq: chunk.q,
+        data: chunk.d
+      });
     }
+    await postEventViaBridge({
+      type: 'transfer.done',
+      request_id: requestId,
+      transfer_id: transferId,
+      source,
+      total_chunks: chunks.length
+    });
   } finally {
     screenshotInFlight = false;
   }
+}
+
+async function sendTransferError(command, code, detail = null) {
+  await postEventViaBridge({
+    type: 'transfer.error',
+    request_id: command?.request_id || null,
+    transfer_id: command?.transfer_id || null,
+    source: command?.source || null,
+    code,
+    detail,
+    ts: Date.now()
+  });
+}
+
+async function handleTransferResume(command) {
+  pruneScreenshotTransfers();
+  const transferId = command?.transfer_id;
+  const session = transferId ? screenshotTransfers.get(transferId) : null;
+  if (!session) {
+    await sendTransferError(command, 'no_such_transfer');
+    return;
+  }
+  if (command?.request_id && session.requestId !== command.request_id) {
+    await sendTransferError(command, 'request_id_mismatch');
+    return;
+  }
+  const fromSeq = Number.isInteger(command?.from_seq)
+    ? Math.max(0, command.from_seq)
+    : Math.max(0, session.highestAckSeq + 1);
+  session.updatedAt = Date.now();
+  for (let seq = fromSeq; seq < session.chunks.length; seq += 1) {
+    const chunk = session.chunks[seq];
+    await postEventViaBridge({
+      type: 'transfer.chunk',
+      request_id: session.requestId,
+      transfer_id: session.transferId,
+      source: session.source,
+      seq: chunk.q,
+      data: chunk.d
+    });
+  }
+  await postEventViaBridge({
+    type: 'transfer.done',
+    request_id: session.requestId,
+    transfer_id: session.transferId,
+    source: session.source,
+    total_chunks: session.chunks.length
+  });
+}
+
+async function handleTransferAck(command) {
+  pruneScreenshotTransfers();
+  const transferId = command?.transfer_id;
+  const session = transferId ? screenshotTransfers.get(transferId) : null;
+  if (!session) {
+    await sendTransferError(command, 'no_such_transfer');
+    return;
+  }
+  if (Number.isInteger(command?.highest_contiguous_seq)) {
+    session.highestAckSeq = Math.max(session.highestAckSeq, command.highest_contiguous_seq);
+  }
+  session.updatedAt = Date.now();
+}
+
+async function handleTransferCancel(command) {
+  const transferId = command?.transfer_id;
+  if (!transferId || !screenshotTransfers.has(transferId)) {
+    await sendTransferError(command, 'no_such_transfer');
+    return;
+  }
+  screenshotTransfers.delete(transferId);
+  await postEventViaBridge({
+    type: 'transfer.cancel.ok',
+    request_id: command?.request_id || null,
+    transfer_id: transferId,
+    ts: Date.now()
+  });
+}
+
+async function handleTransferReset(command) {
+  screenshotTransfers.clear();
+  await postEventViaBridge({
+    type: 'transfer.reset.ok',
+    request_id: command?.request_id || null,
+    ts: Date.now()
+  });
 }
 
 async function tryGzipDataUrlBase64(dataUrl) {
@@ -447,6 +587,41 @@ async function handleBleCommand(command) {
         error: String(err?.message || err),
         ts: Date.now()
       });
+    }
+  }
+  if (command.type === 'transfer.resume') {
+    try {
+      await handleTransferResume(command);
+    } catch (err) {
+      debugLog('handleTransferResume error', String(err?.message || err));
+      await sendTransferError(command, 'transfer_resume_failed', String(err?.message || err));
+    }
+    return;
+  }
+  if (command.type === 'transfer.ack' || command.type === 'transfer.done.ack') {
+    try {
+      await handleTransferAck(command);
+    } catch (err) {
+      debugLog('handleTransferAck error', String(err?.message || err));
+      await sendTransferError(command, 'transfer_ack_failed', String(err?.message || err));
+    }
+    return;
+  }
+  if (command.type === 'transfer.cancel') {
+    try {
+      await handleTransferCancel(command);
+    } catch (err) {
+      debugLog('handleTransferCancel error', String(err?.message || err));
+      await sendTransferError(command, 'transfer_cancel_failed', String(err?.message || err));
+    }
+    return;
+  }
+  if (command.type === 'transfer.reset') {
+    try {
+      await handleTransferReset(command);
+    } catch (err) {
+      debugLog('handleTransferReset error', String(err?.message || err));
+      await sendTransferError(command, 'transfer_reset_failed', String(err?.message || err));
     }
   }
 }

@@ -78,6 +78,17 @@ void CommandRouter::HandleCommand(const airkvm::Command& cmd) {
     case airkvm::CommandType::kScreenshotMeta:
     case airkvm::CommandType::kScreenshotChunk:
     case airkvm::CommandType::kScreenshotError:
+    case airkvm::CommandType::kTransferMeta:
+    case airkvm::CommandType::kTransferChunk:
+    case airkvm::CommandType::kTransferDone:
+    case airkvm::CommandType::kTransferDoneAck:
+    case airkvm::CommandType::kTransferAck:
+    case airkvm::CommandType::kTransferResume:
+    case airkvm::CommandType::kTransferCancel:
+    case airkvm::CommandType::kTransferCancelOk:
+    case airkvm::CommandType::kTransferReset:
+    case airkvm::CommandType::kTransferResetOk:
+    case airkvm::CommandType::kTransferError:
       transport_.EmitControl(cmd.raw.c_str());
       break;
     case airkvm::CommandType::kUnknown:

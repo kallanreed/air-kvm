@@ -192,8 +192,37 @@ export function createResponseCollector(name, command) {
     const chunksBySeq = new Map();
     let meta = null;
     let receivedChars = 0;
+    let transferId = null;
+    let highestContiguousSeq = -1;
+    let lastAckSeq = -1;
+    let timeoutRetries = 0;
+    const kMaxTimeoutRetries = 3;
+    const kAckStride = 8;
 
-    return (msg) => {
+    function computeHighestContiguousSeq() {
+      let seq = -1;
+      while (chunksBySeq.has(seq + 1)) {
+        seq += 1;
+      }
+      return seq;
+    }
+
+    function maybeAck(force = false) {
+      if (!transferId) return null;
+      highestContiguousSeq = computeHighestContiguousSeq();
+      if (!force && highestContiguousSeq < 0) return null;
+      if (!force && highestContiguousSeq - lastAckSeq < kAckStride) return null;
+      if (highestContiguousSeq === lastAckSeq) return null;
+      lastAckSeq = highestContiguousSeq;
+      return {
+        type: 'transfer.ack',
+        request_id: requestId,
+        transfer_id: transferId,
+        highest_contiguous_seq: highestContiguousSeq
+      };
+    }
+
+    const onFrame = (msg) => {
       const msgRequestId = msg.request_id ?? msg.rid;
       const msgSource = msg.source ?? msg.src;
       const msgError = msg.error ?? msg.e;
@@ -219,8 +248,25 @@ export function createResponseCollector(name, command) {
           }
         };
       }
+      if (msg.type === 'transfer.error' && msgRequestId === requestId) {
+        const code = msg.code || msgError || 'transfer_error';
+        return {
+          done: true,
+          ok: false,
+          data: {
+            request_id: requestId,
+            source: msgSource || command.source,
+            error: code,
+            detail: msg
+          }
+        };
+      }
       if (msg.type === 'screenshot.meta') {
         meta = msg;
+        transferId = transferId || msg.transfer_id || msg.tid || null;
+      } else if (msg.type === 'transfer.meta') {
+        meta = msg;
+        transferId = msg.transfer_id || msg.tid || transferId;
       } else if (msg.type === 'screenshot.chunk') {
         const seq = msg.seq ?? msg.q;
         const data = msg.data ?? msg.d;
@@ -254,9 +300,58 @@ export function createResponseCollector(name, command) {
           }
           chunksBySeq.set(seq, data);
         }
+      } else if (msg.type === 'transfer.chunk') {
+        const msgTransferId = msg.transfer_id || msg.tid || null;
+        if (transferId && msgTransferId && msgTransferId !== transferId) {
+          return null;
+        }
+        if (!transferId && msgTransferId) {
+          transferId = msgTransferId;
+        }
+        const seq = msg.seq ?? msg.q;
+        const data = msg.data ?? msg.d;
+        if (Number.isInteger(seq) && typeof data === 'string') {
+          if (data.length > maxChars) {
+            return {
+              done: true,
+              ok: false,
+              data: {
+                request_id: requestId,
+                source: msgSource || command.source,
+                error: 'screenshot_chunk_too_large',
+                detail: { seq, length: data.length, max_chars: maxChars }
+              }
+            };
+          }
+          if (!chunksBySeq.has(seq)) {
+            receivedChars += data.length;
+          }
+          if (receivedChars > maxChars) {
+            return {
+              done: true,
+              ok: false,
+              data: {
+                request_id: requestId,
+                source: msgSource || command.source,
+                error: 'screenshot_response_too_large',
+                detail: { received_chars: receivedChars, max_chars: maxChars }
+              }
+            };
+          }
+          chunksBySeq.set(seq, data);
+          const ack = maybeAck(false);
+          if (ack) {
+            return { done: false, outbound: [ack], extendTimeoutMs: 7000 };
+          }
+        }
+      } else if (msg.type === 'transfer.done') {
+        const doneTransferId = msg.transfer_id || msg.tid || null;
+        if (transferId && doneTransferId && doneTransferId !== transferId) {
+          return null;
+        }
       }
 
-      const totalChunks = meta ? (meta.total_chunks ?? meta.tc) : null;
+      const totalChunks = meta ? (meta.total_chunks ?? meta.tc ?? meta.total ?? meta.t) : null;
       const totalChars = meta ? (meta.total_chars ?? meta.tch) : null;
       const encoding = (meta?.encoding ?? meta?.e ?? command.encoding ?? 'b64');
       if (!meta || !Number.isInteger(totalChunks) || totalChunks < 0) {
@@ -307,6 +402,13 @@ export function createResponseCollector(name, command) {
       return {
         done: true,
         ok: true,
+        outbound: transferId
+          ? [{
+            type: 'transfer.done.ack',
+            request_id: requestId,
+            transfer_id: transferId
+          }]
+          : undefined,
         data: {
           request_id: requestId,
           source: (meta.source ?? meta.src) || command.source,
@@ -320,6 +422,38 @@ export function createResponseCollector(name, command) {
         }
       };
     };
+    onFrame.onTimeout = () => {
+      if (!transferId) return null;
+      if (timeoutRetries >= kMaxTimeoutRetries) {
+        return {
+          done: true,
+          ok: false,
+          data: {
+            request_id: requestId,
+            source: command.source,
+            error: 'screenshot_transfer_timeout',
+            detail: {
+              transfer_id: transferId,
+              retries: timeoutRetries,
+              highest_contiguous_seq: computeHighestContiguousSeq()
+            }
+          }
+        };
+      }
+      timeoutRetries += 1;
+      const fromSeq = computeHighestContiguousSeq() + 1;
+      return {
+        done: false,
+        outbound: [{
+          type: 'transfer.resume',
+          request_id: requestId,
+          transfer_id: transferId,
+          from_seq: fromSeq
+        }],
+        extendTimeoutMs: 7000
+      };
+    };
+    return onFrame;
   }
 
   return null;
