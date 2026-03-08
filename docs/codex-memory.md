@@ -388,3 +388,4 @@
 
 - 2026-03-07: User preference: command-level bridge logs should always be visible in the bridge page log; raw BLE byte/notify traces remain verbose-only.
 - 2026-03-07: Bridge command log policy: always-visible lifecycle commands, but transport ACKs (plain {ok:true}) and transfer.ack are verbose-only; summarize plain ok frames as type=ack.
+- 2026-03-07: Bridge default log now suppresses SW->BLE command entries; enable Verbose to see outbound command traffic.

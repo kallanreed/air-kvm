@@ -151,6 +151,7 @@ function isVerboseOnlyCommand(frame) {
 }
 
 function commandLog(direction, frame) {
+  if (!verboseLoggingEnabled && direction === 'SW->BLE') return;
   if (!verboseLoggingEnabled && isVerboseOnlyCommand(frame)) return;
   infoLog(`[cmd] ${direction}`, summarizeCommand(frame));
 }
