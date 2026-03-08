@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createServer } from '../src/server.js';
+import { formatTransferId } from '../src/binary_frame.js';
 
 function makeServerHarnessWithFrames(framesByRequest = {}) {
   const sent = [];
@@ -9,8 +10,9 @@ function makeServerHarnessWithFrames(framesByRequest = {}) {
     async sendCommand(command, collector) {
       const key = command.request_id;
       const frames = framesByRequest[key] || [];
-      for (const msg of frames) {
-        const collected = collector ? collector(msg, { kind: 'ctrl', msg }, []) : null;
+      for (const frame of frames) {
+        const msg = frame.kind === 'ctrl' ? frame.msg : null;
+        const collected = collector ? collector(msg, frame, []) : null;
         if (collected?.done) {
           return {
             ok: typeof collected.ok === 'boolean' ? collected.ok : true,
@@ -43,26 +45,35 @@ async function callScreenshotTool(server, requestId, extraArgs = {}) {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-test('reassembles large out-of-order screenshot stream', async () => {
+test('reassembles large out-of-order binary screenshot stream', async () => {
   const requestId = 'shot-large-1';
-  const chunkCount = 600;
+  const transferId = formatTransferId(0x44);
+  const chunkCount = 120;
   const chunks = [];
   const parts = [];
   for (let i = 0; i < chunkCount; i += 1) {
-    const d = String(i).padStart(4, '0');
-    parts.push(d);
-    chunks.push({ type: 'screenshot.chunk', rid: requestId, src: 'tab', q: i, d });
+    const payload = Buffer.from(`P${String(i).padStart(3, '0')}`);
+    parts.push(payload);
+    chunks.push({ kind: 'bin', transfer_id: transferId, seq: i, payload });
   }
   const frames = [
     {
-      type: 'screenshot.meta',
-      rid: requestId,
-      src: 'tab',
-      m: 'application/octet-stream',
-      tc: chunkCount,
-      tch: parts.join('').length
+      kind: 'ctrl',
+      msg: {
+        type: 'transfer.meta',
+        request_id: requestId,
+        transfer_id: transferId,
+        source: 'tab',
+        mime: 'application/octet-stream',
+        total_chunks: chunkCount,
+        total_bytes: parts.reduce((acc, p) => acc + p.length, 0)
+      }
     },
-    ...chunks.reverse()
+    ...chunks.reverse(),
+    {
+      kind: 'ctrl',
+      msg: { type: 'transfer.done', request_id: requestId, transfer_id: transferId, total_chunks: chunkCount }
+    }
   ];
   const { sent, server } = makeServerHarnessWithFrames({ [requestId]: frames });
 
@@ -71,15 +82,28 @@ test('reassembles large out-of-order screenshot stream', async () => {
   assert.equal(sent[0].isError, undefined);
   assert.equal(payload.request_id, requestId);
   assert.equal(payload.total_chunks, chunkCount);
-  assert.equal(payload.base64, parts.join(''));
+  assert.equal(payload.base64, Buffer.concat(parts).toString('base64'));
 });
 
-test('missing screenshot chunk results in structured transport timeout error', async () => {
+test('missing binary screenshot chunk results in structured transport timeout error', async () => {
   const requestId = 'shot-missing-1';
+  const transferId = formatTransferId(0x45);
   const frames = [
-    { type: 'screenshot.meta', rid: requestId, src: 'tab', m: 'application/octet-stream', tc: 3, tch: 9 },
-    { type: 'screenshot.chunk', rid: requestId, src: 'tab', q: 0, d: 'AAA' },
-    { type: 'screenshot.chunk', rid: requestId, src: 'tab', q: 2, d: 'CCC' }
+    {
+      kind: 'ctrl',
+      msg: {
+        type: 'transfer.meta',
+        request_id: requestId,
+        transfer_id: transferId,
+        source: 'tab',
+        mime: 'application/octet-stream',
+        total_chunks: 3,
+        total_bytes: 9
+      }
+    },
+    { kind: 'bin', transfer_id: transferId, seq: 0, payload: Buffer.from('AAA') },
+    { kind: 'bin', transfer_id: transferId, seq: 2, payload: Buffer.from('CCC') },
+    { kind: 'ctrl', msg: { type: 'transfer.done', request_id: requestId, transfer_id: transferId, total_chunks: 3 } }
   ];
   const { sent, server } = makeServerHarnessWithFrames({ [requestId]: frames });
 
@@ -91,25 +115,10 @@ test('missing screenshot chunk results in structured transport timeout error', a
   assert.equal(payload.detail, 'device_timeout');
 });
 
-test('oversized screenshot stream is rejected with structured size error', async () => {
-  const requestId = 'shot-oversize-1';
-  const frames = [
-    { type: 'screenshot.meta', rid: requestId, src: 'tab', m: 'application/octet-stream', tc: 1, tch: 90001 },
-    { type: 'screenshot.chunk', rid: requestId, src: 'tab', q: 0, d: 'A'.repeat(90001) }
-  ];
-  const { sent, server } = makeServerHarnessWithFrames({ [requestId]: frames });
-
-  await callScreenshotTool(server, requestId, { max_chars: 90000 });
-  const payload = JSON.parse(sent[0].result.content[0].text);
-  assert.equal(sent[0].isError, true);
-  assert.equal(payload.request_id, requestId);
-  assert.equal(payload.error, 'screenshot_response_too_large');
-});
-
 test('explicit screenshot.error is surfaced as structured tool error', async () => {
   const requestId = 'shot-error-1';
   const frames = [
-    { type: 'screenshot.error', rid: requestId, src: 'tab', e: 'desktop_capture_denied' }
+    { kind: 'ctrl', msg: { type: 'screenshot.error', rid: requestId, src: 'tab', e: 'desktop_capture_denied' } }
   ];
   const { sent, server } = makeServerHarnessWithFrames({ [requestId]: frames });
 

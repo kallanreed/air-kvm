@@ -19,6 +19,19 @@ constexpr const char* kTxCharUuid = "6E400103-B5A3-F393-E0A9-E50E24DCCB01";
 constexpr const char* kBootMsg =
     "{\"type\":\"boot\",\"fw\":\"air-kvm-ctrl-cb01\",\"version\":\"" AIRKVM_FW_VERSION
     "\",\"built_at\":\"" AIRKVM_FW_BUILT_AT "\"}";
+constexpr uint8_t kTransferMagic0 = 0x41;  // 'A'
+constexpr uint8_t kTransferMagic1 = 0x4b;  // 'K'
+constexpr size_t kTransferMinFrameLen = 18;
+
+bool IsBinaryTransferFrame(const std::string& value) {
+  if (value.size() < kTransferMinFrameLen) return false;
+  const auto* bytes = reinterpret_cast<const uint8_t*>(value.data());
+  if (bytes[0] != kTransferMagic0 || bytes[1] != kTransferMagic1) return false;
+  const uint16_t payload_len = static_cast<uint16_t>(bytes[12]) |
+                               (static_cast<uint16_t>(bytes[13]) << 8);
+  const size_t expected_len = kTransferMinFrameLen + payload_len;
+  return value.size() == expected_len;
+}
 }  // namespace
 
 namespace airkvm::fw {
@@ -71,6 +84,12 @@ void AirKvmApp::Loop() {
 
 void AirKvmApp::OnBleWrite(const std::string& value) {
   if (value.empty()) return;
+  if (IsBinaryTransferFrame(value)) {
+    transport_.EmitBinaryFrame(
+        reinterpret_cast<const uint8_t*>(value.data()),
+        value.size());
+    return;
+  }
 
   bool saw_newline = false;
   for (char c : value) {

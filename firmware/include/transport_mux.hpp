@@ -15,12 +15,17 @@ class TransportMux {
   void SetBleTxCharacteristic(NimBLECharacteristic* characteristic);
   void EmitLog(const String& message);
   void EmitControl(const char* payload);
+  void EmitBinaryFrame(const uint8_t* bytes, size_t len);
   void EmitState(const DeviceState& state);
 
  private:
   static constexpr size_t kMaxUartLineLen = 1024;
+  static constexpr size_t kMaxBinaryFrameLen = 512;
   struct TxFrame {
+    bool is_binary;
     char uart_line[kMaxUartLineLen];
+    size_t binary_len;
+    uint8_t binary[kMaxBinaryFrameLen];
   };
 
   void EnqueueFrame(const TxFrame& frame);

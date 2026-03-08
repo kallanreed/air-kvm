@@ -1,5 +1,3 @@
-import { gunzipSync } from 'node:zlib';
-
 export const TOOL_DEFINITIONS = [
   {
     name: 'airkvm_send',
@@ -52,7 +50,7 @@ export const TOOL_DEFINITIONS = [
         quality: { type: 'number', minimum: 0.3, maximum: 0.9 },
         max_chars: { type: 'integer', minimum: 20000, maximum: 200000 },
         tab_id: { type: 'integer' },
-        encoding: { type: 'string', enum: ['b64', 'b64z'] }
+        encoding: { type: 'string', enum: ['bin'] }
       },
       required: []
     }
@@ -68,7 +66,7 @@ export const TOOL_DEFINITIONS = [
         max_height: { type: 'integer', minimum: 120, maximum: 1080 },
         quality: { type: 'number', minimum: 0.3, maximum: 0.9 },
         max_chars: { type: 'integer', minimum: 20000, maximum: 200000 },
-        encoding: { type: 'string', enum: ['b64', 'b64z'] }
+        encoding: { type: 'string', enum: ['bin'] }
       },
       required: []
     }
@@ -124,7 +122,7 @@ export function buildCommandForTool(name, args = {}) {
   if (typeof args?.quality === 'number') screenshotOptions.quality = args.quality;
   if (Number.isInteger(args?.max_chars)) screenshotOptions.max_chars = args.max_chars;
   if (Number.isInteger(args?.tab_id)) screenshotOptions.tab_id = args.tab_id;
-  if (args?.encoding === 'b64' || args?.encoding === 'b64z') screenshotOptions.encoding = args.encoding;
+  screenshotOptions.encoding = 'bin';
 
   if (name === 'airkvm_list_tabs') {
     return { type: 'tabs.list.request', request_id: requestId };
@@ -207,13 +205,15 @@ export function createResponseCollector(name, command) {
     const maxChars = Number.isInteger(command.max_chars) ? command.max_chars : 200000;
     const chunksBySeq = new Map();
     let meta = null;
-    let receivedChars = 0;
+    let receivedBytes = 0;
     let transferId = null;
     let highestContiguousSeq = -1;
     let lastAckSeq = -1;
     let timeoutRetries = 0;
+    let sawTransferDone = false;
     const kMaxTimeoutRetries = 3;
     const kAckStride = 8;
+    const maxRawBytes = Math.floor((maxChars * 3) / 4);
 
     function computeHighestContiguousSeq() {
       let seq = -1;
@@ -238,7 +238,55 @@ export function createResponseCollector(name, command) {
       };
     }
 
-    const onFrame = (msg) => {
+    const onFrame = (msg, frame) => {
+      if (frame?.kind === 'bin_error') {
+        if (typeof frame.transfer_id === 'string' && Number.isInteger(frame.seq)) {
+          return {
+            done: false,
+            outbound: [{
+              type: 'transfer.nack',
+              request_id: requestId,
+              transfer_id: frame.transfer_id,
+              seq: frame.seq,
+              reason: frame.error || 'chunk_error'
+            }],
+            extendTimeoutMs: 7000
+          };
+        }
+        return null;
+      }
+
+      if (frame?.kind === 'bin') {
+        if (!meta || !transferId) return null;
+        if (frame.transfer_id !== transferId) return null;
+        if (!Number.isInteger(frame.seq) || !Buffer.isBuffer(frame.payload)) return null;
+
+        const seq = frame.seq;
+        const bytes = frame.payload;
+        if (!chunksBySeq.has(seq)) {
+          receivedBytes += bytes.length;
+        }
+        if (receivedBytes > maxRawBytes) {
+          return {
+            done: true,
+            ok: false,
+            data: {
+              request_id: requestId,
+              source: (meta.source ?? meta.src) || command.source,
+              error: 'screenshot_response_too_large',
+              detail: { received_bytes: receivedBytes, max_raw_bytes: maxRawBytes }
+            }
+          };
+        }
+        chunksBySeq.set(seq, bytes);
+        const ack = maybeAck(false);
+        if (ack) {
+          return { done: false, outbound: [ack], extendTimeoutMs: 7000 };
+        }
+        return null;
+      }
+
+      if (!msg || typeof msg !== 'object') return null;
       const msgRequestId = msg.request_id ?? msg.rid;
       const msgSource = msg.source ?? msg.src;
       const msgError = msg.error ?? msg.e;
@@ -277,110 +325,24 @@ export function createResponseCollector(name, command) {
           }
         };
       }
-      if (msg.type === 'screenshot.meta') {
-        meta = msg;
-        transferId = transferId || msg.transfer_id || msg.tid || null;
-      } else if (msg.type === 'transfer.meta') {
+      if (msg.type === 'transfer.meta') {
         meta = msg;
         transferId = msg.transfer_id || msg.tid || transferId;
-      } else if (msg.type === 'screenshot.chunk') {
-        const seq = msg.seq ?? msg.q;
-        const data = msg.data ?? msg.d;
-        if (Number.isInteger(seq) && typeof data === 'string') {
-          if (data.length > maxChars) {
-            return {
-              done: true,
-              ok: false,
-              data: {
-                request_id: requestId,
-                source: msgSource || command.source,
-                error: 'screenshot_chunk_too_large',
-                detail: { seq, length: data.length, max_chars: maxChars }
-              }
-            };
-          }
-          if (!chunksBySeq.has(seq)) {
-            receivedChars += data.length;
-          }
-          if (receivedChars > maxChars) {
-            return {
-              done: true,
-              ok: false,
-              data: {
-                request_id: requestId,
-                source: msgSource || command.source,
-                error: 'screenshot_response_too_large',
-                detail: { received_chars: receivedChars, max_chars: maxChars }
-              }
-            };
-          }
-          chunksBySeq.set(seq, data);
-        }
-      } else if (msg.type === 'transfer.chunk') {
-        if (!meta) {
-          // Ignore transfer chunks until transfer meta is observed for this request.
-          return null;
-        }
-        const msgTransferId = msg.transfer_id || msg.tid || null;
-        if (!msgTransferId) {
-          return null;
-        }
-        if (transferId && msgTransferId !== transferId) {
-          return null;
-        }
-        if (!transferId && msgTransferId) {
-          transferId = msgTransferId;
-        }
-        const seq = msg.seq ?? msg.q;
-        const data = msg.data ?? msg.d;
-        if (Number.isInteger(seq) && typeof data === 'string') {
-          if (data.length > maxChars) {
-            return {
-              done: true,
-              ok: false,
-              data: {
-                request_id: requestId,
-                source: msgSource || command.source,
-                error: 'screenshot_chunk_too_large',
-                detail: { seq, length: data.length, max_chars: maxChars }
-              }
-            };
-          }
-          if (!chunksBySeq.has(seq)) {
-            receivedChars += data.length;
-          }
-          if (receivedChars > maxChars) {
-            return {
-              done: true,
-              ok: false,
-              data: {
-                request_id: requestId,
-                source: msgSource || command.source,
-                error: 'screenshot_response_too_large',
-                detail: { received_chars: receivedChars, max_chars: maxChars }
-              }
-            };
-          }
-          chunksBySeq.set(seq, data);
-          const ack = maybeAck(false);
-          if (ack) {
-            return { done: false, outbound: [ack], extendTimeoutMs: 7000 };
-          }
-        }
       } else if (msg.type === 'transfer.done') {
         const doneTransferId = msg.transfer_id || msg.tid || null;
         if (transferId && doneTransferId && doneTransferId !== transferId) {
           return null;
         }
+        sawTransferDone = true;
       }
 
       const totalChunks = meta ? (meta.total_chunks ?? meta.tc ?? meta.total ?? meta.t) : null;
-      const totalChars = meta ? (meta.total_chars ?? meta.tch) : null;
-      const encoding = (meta?.encoding ?? meta?.e ?? command.encoding ?? 'b64');
+      const totalBytes = meta ? (meta.total_bytes ?? meta.tb) : null;
+      const encoding = 'bin';
       if (!meta || !Number.isInteger(totalChunks) || totalChunks < 0) {
         return null;
       }
-      if (Number.isInteger(totalChars) && totalChars > maxChars) {
+      if (Number.isInteger(totalBytes) && totalBytes > maxRawBytes) {
         return {
           done: true,
           ok: false,
@@ -388,9 +350,12 @@ export function createResponseCollector(name, command) {
             request_id: requestId,
             source: msgSource || command.source,
             error: 'screenshot_response_too_large',
-            detail: { total_chars: totalChars, max_chars: maxChars }
+            detail: { total_bytes: totalBytes, max_raw_bytes: maxRawBytes }
           }
         };
+      }
+      if (!sawTransferDone) {
+        return null;
       }
       if (chunksBySeq.size < totalChunks) {
         return null;
@@ -404,25 +369,9 @@ export function createResponseCollector(name, command) {
         ordered.push(chunksBySeq.get(seq));
       }
 
-      const base64 = ordered.join('');
-      let normalizedBase64 = base64;
+      const rawBytes = Buffer.concat(ordered);
+      const normalizedBase64 = rawBytes.toString('base64');
       const mime = (meta.mime ?? meta.m) || 'application/octet-stream';
-      if (encoding === 'b64z') {
-        try {
-          const zipped = Buffer.from(base64, 'base64');
-          normalizedBase64 = gunzipSync(zipped).toString('base64');
-        } catch {
-          return {
-            done: true,
-            ok: false,
-            data: {
-              request_id: requestId,
-              source: (meta.source ?? meta.src) || command.source,
-              error: 'screenshot_decode_failed'
-            }
-          };
-        }
-      }
       if (!base64LooksLikeMime(normalizedBase64, mime)) {
         return {
           done: true,

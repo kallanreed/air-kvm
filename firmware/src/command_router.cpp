@@ -87,6 +87,7 @@ void CommandRouter::HandleCommand(const airkvm::Command& cmd) {
     case airkvm::CommandType::kTransferDone:
     case airkvm::CommandType::kTransferDoneAck:
     case airkvm::CommandType::kTransferAck:
+    case airkvm::CommandType::kTransferNack:
     case airkvm::CommandType::kTransferResume:
     case airkvm::CommandType::kTransferCancel:
     case airkvm::CommandType::kTransferCancelOk:

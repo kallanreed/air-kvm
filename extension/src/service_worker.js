@@ -1,4 +1,5 @@
 import { dataUrlToMetaAndChunks, resolveScreenshotConfig } from './screenshot_protocol.js';
+import { encodeTransferChunkFrame, makeTransferId } from './binary_frame.js';
 const kBleBridgePagePath = 'src/ble_bridge.html';
 const kDebug = true;
 const kScreenshotCaptureTimeoutMs = 25000;
@@ -131,6 +132,12 @@ async function resolveTargetTab(preferredTabId = null) {
     lastAutomationTabId = fallback.id;
     return fallback;
   }
+  const anyWindowTabs = await chrome.tabs.query({});
+  const crossWindowFallback = anyWindowTabs.find((tab) => isAutomationCandidateTab(tab));
+  if (crossWindowFallback) {
+    lastAutomationTabId = crossWindowFallback.id;
+    return crossWindowFallback;
+  }
   return null;
 }
 
@@ -154,6 +161,25 @@ async function postEventViaBridge(payload) {
     return Boolean(res?.ok);
   } catch {
     debugLog('postEventViaBridge failed', { traceId });
+    return false;
+  }
+}
+
+async function postBinaryViaBridge(bytes) {
+  bridgeTraceSeq += 1;
+  const traceId = `sw-${Date.now()}-${bridgeTraceSeq}`;
+  debugLog('postBinaryViaBridge tx', { traceId, bytes: bytes?.length || 0 });
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: 'ble.postBinary',
+      target: 'ble-page',
+      bytes: Array.from(bytes || []),
+      traceId
+    });
+    debugLog('postBinaryViaBridge rx', { traceId, res });
+    return Boolean(res?.ok);
+  } catch {
+    debugLog('postBinaryViaBridge failed', { traceId });
     return false;
   }
 }
@@ -187,10 +213,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 function makeRequestId() {
   return `${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
-}
-
-function makeTransferId() {
-  return `tx_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
 }
 
 function pruneScreenshotTransfers(nowTs = Date.now()) {
@@ -377,39 +399,44 @@ async function sendScreenshot(command) {
       encodedHeight: encoded.encodedHeight,
       encodedQuality: encoded.encodedQuality
     });
-    const compression = config.encoding === 'b64z'
-      ? await tryGzipDataUrlBase64(encoded.dataUrl)
-      : { encoding: 'b64', payloadBase64: null };
-    debugLog('sendScreenshot compression', {
-      source,
-      requestId,
-      requested: config.encoding,
-      selected: compression.encoding
-    });
+    const transferIdMeta = makeTransferId();
     const { meta, chunks } = dataUrlToMetaAndChunks(
       encoded.dataUrl,
       requestId,
       source,
+      transferIdMeta.string,
       encoded,
-      120,
-      compression.encoding,
-      compression.payloadBase64
+      160
     );
     debugLog('sendScreenshot encoded', {
       source,
       requestId,
-      encoding: compression.encoding,
+      encoding: meta.encoding,
       chunks: chunks.length,
-      totalChars: meta.tch
+      totalBytes: meta.total_bytes
     });
     pruneScreenshotTransfers();
-    const transferId = makeTransferId();
+    const transferId = transferIdMeta.string;
+    const transferIdNumeric = transferIdMeta.numeric;
+    const framesBySeq = new Map();
+    for (const chunk of chunks) {
+      framesBySeq.set(
+        chunk.seq,
+        encodeTransferChunkFrame({
+          transferIdNumeric,
+          seq: chunk.seq,
+          payloadBytes: chunk.bytes
+        })
+      );
+    }
     const session = {
       transferId,
+      transferIdNumeric,
       requestId,
       source,
       meta,
-      chunks,
+      framesBySeq,
+      totalChunks: chunks.length,
       updatedAt: Date.now(),
       highestAckSeq: -1
     };
@@ -427,28 +454,12 @@ async function sendScreenshot(command) {
 
     await postEventViaBridge({
       type: 'transfer.meta',
-      request_id: requestId,
-      transfer_id: transferId,
-      source,
-      mime: meta.m,
-      encoding: meta.e,
-      chunk_size: meta.cs,
-      total_chunks: meta.tc,
-      total_chars: meta.tch,
-      encoded_width: meta.ew,
-      encoded_height: meta.eh,
-      encoded_quality: meta.eq,
-      encode_attempts: meta.ea
+      ...meta
     });
     for (const chunk of chunks) {
-      await postEventViaBridge({
-        type: 'transfer.chunk',
-        request_id: requestId,
-        transfer_id: transferId,
-        source,
-        seq: chunk.q,
-        data: chunk.d
-      });
+      const frame = framesBySeq.get(chunk.seq);
+      if (!frame) continue;
+      await postBinaryViaBridge(frame);
     }
     await postEventViaBridge({
       type: 'transfer.done',
@@ -505,30 +516,24 @@ async function handleTransferResume(command) {
     requestId: session.requestId,
     transferId: session.transferId,
     fromSeq,
-    totalChunks: session.chunks.length
+    totalChunks: session.totalChunks
   });
   void writeSwBreadcrumb('transfer_resume', {
     request_id: session.requestId,
     transfer_id: session.transferId,
     from_seq: fromSeq
   });
-  for (let seq = fromSeq; seq < session.chunks.length; seq += 1) {
-    const chunk = session.chunks[seq];
-    await postEventViaBridge({
-      type: 'transfer.chunk',
-      request_id: session.requestId,
-      transfer_id: session.transferId,
-      source: session.source,
-      seq: chunk.q,
-      data: chunk.d
-    });
+  for (let seq = fromSeq; seq < session.totalChunks; seq += 1) {
+    const frame = session.framesBySeq.get(seq);
+    if (!frame) continue;
+    await postBinaryViaBridge(frame);
   }
   await postEventViaBridge({
     type: 'transfer.done',
     request_id: session.requestId,
     transfer_id: session.transferId,
     source: session.source,
-    total_chunks: session.chunks.length
+    total_chunks: session.totalChunks
   });
 }
 
@@ -570,6 +575,33 @@ async function handleTransferDoneAck(command) {
   });
 }
 
+async function handleTransferNack(command) {
+  pruneScreenshotTransfers();
+  const transferId = command?.transfer_id;
+  const seq = command?.seq;
+  const session = transferId ? screenshotTransfers.get(transferId) : null;
+  if (!session) {
+    await sendTransferError(command, 'no_such_transfer');
+    return;
+  }
+  if (!Number.isInteger(seq) || seq < 0 || seq >= session.totalChunks) {
+    await sendTransferError(command, 'invalid_seq');
+    return;
+  }
+  const frame = session.framesBySeq.get(seq);
+  if (!frame) {
+    await sendTransferError(command, 'no_such_chunk');
+    return;
+  }
+  session.updatedAt = Date.now();
+  debugLog('transfer nack resend', {
+    requestId: session.requestId,
+    transferId,
+    seq
+  });
+  await postBinaryViaBridge(frame);
+}
+
 async function handleTransferCancel(command) {
   const transferId = command?.transfer_id;
   if (!transferId || !screenshotTransfers.has(transferId)) {
@@ -596,46 +628,6 @@ async function handleTransferReset(command) {
     request_id: command?.request_id || null,
     ts: Date.now()
   });
-}
-
-async function tryGzipDataUrlBase64(dataUrl) {
-  const comma = dataUrl.indexOf(',');
-  if (comma === -1) throw new Error('screenshot_invalid_data_url');
-  const base64 = dataUrl.slice(comma + 1);
-  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-  if (typeof CompressionStream !== 'function') {
-    return { encoding: 'b64', payloadBase64: null };
-  }
-  try {
-    const zippedBase64 = await Promise.race([
-      gzipBytesToBase64(bytes),
-      new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('compression_timeout')), 3000);
-      })
-    ]);
-    if (typeof zippedBase64 !== 'string' || zippedBase64.length >= base64.length) {
-      // Do not claim compressed mode when compression failed or did not reduce payload size.
-      return { encoding: 'b64', payloadBase64: null };
-    }
-    return { encoding: 'b64z', payloadBase64: zippedBase64 };
-  } catch {
-    // Compression path is optional; always preserve screenshot flow via b64 fallback.
-    return { encoding: 'b64', payloadBase64: null };
-  }
-}
-
-async function gzipBytesToBase64(bytes) {
-  const cs = new CompressionStream('gzip');
-  const writer = cs.writable.getWriter();
-  await writer.write(bytes);
-  await writer.close();
-  const compressed = await new Response(cs.readable).arrayBuffer();
-  const zipped = new Uint8Array(compressed);
-  let binary = '';
-  for (let i = 0; i < zipped.length; i += 1) {
-    binary += String.fromCharCode(zipped[i]);
-  }
-  return btoa(binary);
 }
 
 async function sendTabsList(command) {
@@ -729,6 +721,15 @@ async function handleBleCommand(command) {
     } catch (err) {
       debugLog('handleTransferDoneAck error', String(err?.message || err));
       await sendTransferError(command, 'transfer_done_ack_failed', String(err?.message || err));
+    }
+    return;
+  }
+  if (command.type === 'transfer.nack') {
+    try {
+      await handleTransferNack(command);
+    } catch (err) {
+      debugLog('handleTransferNack error', String(err?.message || err));
+      await sendTransferError(command, 'transfer_nack_failed', String(err?.message || err));
     }
     return;
   }

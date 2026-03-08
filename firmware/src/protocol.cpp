@@ -199,6 +199,13 @@ std::optional<Command> ParseCommandLine(const std::string& line) {
     return cmd;
   }
 
+  if (Contains(line, "\"type\":\"transfer.nack\"")) {
+    cmd.type = CommandType::kTransferNack;
+    cmd.request_id = ExtractString(line, "request_id");
+    cmd.raw = line;
+    return cmd;
+  }
+
   if (Contains(line, "\"type\":\"transfer.resume\"")) {
     cmd.type = CommandType::kTransferResume;
     cmd.request_id = ExtractString(line, "request_id");

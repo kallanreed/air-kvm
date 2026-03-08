@@ -223,6 +223,36 @@
     - MCP collector now ignores `transfer.chunk` frames until `transfer.meta` is observed for that request.
     - MCP collector validates image magic bytes for `image/jpeg` and `image/png`; invalid payload returns `screenshot_corrupt_payload`.
     - MCP screenshot autosave is now opt-in behind `AIRKVM_SAVE_SCREENSHOTS=1` to avoid test pollution.
+- Binary screenshot transfer cutover (March 8, 2026, evening):
+  - `b64`/`b64z` screenshot chunk transport was replaced with binary chunk frames.
+  - Binary frame format now includes:
+    - magic bytes (`0x41 0x4B`)
+    - version
+    - frame type
+    - `transfer_id` (uint32 LE)
+    - `seq` (uint32 LE)
+    - `payload_len` (uint16 LE)
+    - `payload`
+    - `crc32` (uint32 LE)
+  - Extension now:
+    - emits `transfer.meta` with `encoding: "bin"`
+    - sends chunk payload using raw framed binary (`ble.postBinary`)
+    - handles `transfer.nack` to resend a specific seq
+    - keeps single active transfer session policy.
+  - Firmware now:
+    - detects binary transfer frame writes on BLE RX by magic/length
+    - forwards those bytes losslessly to UART via `EmitBinaryFrame`
+    - keeps JSON command path for all control messages.
+  - MCP now:
+    - parses mixed UART stream (JSON lines + binary frames)
+    - validates binary frame length + CRC32
+    - emits `transfer.nack` for bad binary chunk frames
+    - reassembles screenshots from binary payloads and still returns base64 tool output.
+  - Test status after cutover:
+    - `cd mcp && node --test` pass
+    - `cd extension && node --test` pass
+    - `cd firmware && pio test -e native` pass
+    - `cd firmware && pio run -e esp32dev` pass
 - UART noise reduction (March 7, 2026, investigator action):
   - Stopped mirroring BLE ingress payload logs (`rx.ble ...`) to UART in `CommandRouter::ProcessLine`.
   - Rationale: BLE command echo on UART created heavy log noise and increased risk of framing interleaving/parse confusion during screenshot transfers.

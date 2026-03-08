@@ -24,54 +24,53 @@ export function resolveScreenshotConfig(command, base = kDefaultScreenshotConfig
     maxHeight: clampInt(command?.max_height, 120, 1080, base.maxHeight),
     jpegQuality: clampNumber(command?.quality, 0.3, 0.9, base.jpegQuality),
     maxBase64Chars: clampInt(command?.max_chars, 20000, 200000, base.maxBase64Chars),
-    encoding: command?.encoding === 'b64z' ? 'b64z' : 'b64',
+    encoding: 'bin',
     maxAttempts: base.maxAttempts,
     downscaleFactor: base.downscaleFactor,
     minJpegQuality: base.minJpegQuality
   };
 }
 
-export function dataUrlToMetaAndChunks(
-  dataUrl,
-  requestId,
-  source,
-  encodeStats = null,
-  chunkSize = 120,
-  encoding = 'b64',
-  payloadBase64Override = null
-) {
+export function dataUrlToMetaAndChunks(dataUrl, requestId, source, transferId, encodeStats = null, chunkSize = 160) {
   const comma = dataUrl.indexOf(',');
   if (comma === -1) throw new Error('screenshot_invalid_data_url');
 
   const header = dataUrl.slice(0, comma);
-  const base64 = payloadBase64Override || dataUrl.slice(comma + 1);
+  const base64 = dataUrl.slice(comma + 1);
   const mimeMatch = /^data:([^;]+);base64$/i.exec(header);
   const mime = mimeMatch?.[1] || 'application/octet-stream';
-  const totalChunks = Math.ceil(base64.length / chunkSize);
+  const binary = atob(base64);
+  const totalBytes = binary.length;
+  const totalChunks = Math.ceil(totalBytes / chunkSize);
 
   const meta = {
-    type: 'screenshot.meta',
-    rid: requestId,
-    src: source,
-    m: mime,
-    e: encoding,
-    cs: chunkSize,
-    tc: totalChunks,
-    tch: base64.length,
-    ew: encodeStats?.encodedWidth || null,
-    eh: encodeStats?.encodedHeight || null,
-    eq: encodeStats?.encodedQuality || null,
-    ea: encodeStats?.attempts || null
+    type: 'transfer.meta',
+    request_id: requestId,
+    transfer_id: transferId,
+    source,
+    mime,
+    encoding: 'bin',
+    chunk_size: chunkSize,
+    total_chunks: totalChunks,
+    total_bytes: totalBytes,
+    total_chars: base64.length,
+    encoded_width: encodeStats?.encodedWidth || null,
+    encoded_height: encodeStats?.encodedHeight || null,
+    encoded_quality: encodeStats?.encodedQuality || null,
+    encode_attempts: encodeStats?.attempts || null
   };
 
   const chunks = [];
   for (let seq = 0; seq < totalChunks; seq += 1) {
+    const start = seq * chunkSize;
+    const end = Math.min(totalBytes, start + chunkSize);
+    const bytes = new Uint8Array(end - start);
+    for (let i = start; i < end; i += 1) {
+      bytes[i - start] = binary.charCodeAt(i);
+    }
     chunks.push({
-      type: 'screenshot.chunk',
-      rid: requestId,
-      src: source,
-      q: seq,
-      d: base64.slice(seq * chunkSize, (seq + 1) * chunkSize)
+      seq,
+      bytes
     });
   }
 

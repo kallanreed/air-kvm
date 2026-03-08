@@ -2,6 +2,7 @@ import {
   connectBle,
   disconnectBle,
   getConnectedDeviceInfo,
+  postBinary,
   postEvent,
   readBleTxSnapshot,
   setBleDebugLogger
@@ -394,7 +395,27 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .catch((err) => sendResponse({ ok: false, error: String(err?.message || err) }));
     return true;
   }
-  if (!msg || msg.type !== 'ble.post' || msg.target !== 'ble-page') return;
+  if (!msg || msg.target !== 'ble-page') return;
+  if (msg.type === 'ble.postBinary') {
+    const bytes = Array.isArray(msg.bytes) ? Uint8Array.from(msg.bytes) : null;
+    debugLog('ble.postBinary from service worker', {
+      traceId: msg.traceId || null,
+      bytes: bytes?.length || 0
+    });
+    markBridgeActivity('sw_post_binary');
+    postBinary(bytes, { traceId: msg.traceId || null })
+      .then((ok) => {
+        debugLog('ble.postBinary result', { traceId: msg.traceId || null, ok });
+        sendResponse({ ok });
+      })
+      .catch((err) => {
+        const error = String(err?.message || err);
+        debugLog('ble.postBinary error', { traceId: msg.traceId || null, error });
+        sendResponse({ ok: false, error });
+      });
+    return true;
+  }
+  if (msg.type !== 'ble.post') return;
   debugLog('ble.post from service worker', {
     traceId: msg.traceId || null,
     type: msg?.payload?.type,

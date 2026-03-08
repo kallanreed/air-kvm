@@ -47,7 +47,7 @@ export function validateAgentCommand(msg) {
       if (typeof msg.quality !== 'undefined' && typeof msg.quality !== 'number') {
         return { ok: false, error: 'invalid_screenshot_request' };
       }
-      if (typeof msg.encoding !== 'undefined' && msg.encoding !== 'b64' && msg.encoding !== 'b64z') {
+      if (typeof msg.encoding !== 'undefined' && msg.encoding !== 'bin') {
         return { ok: false, error: 'invalid_screenshot_request' };
       }
       return { ok: true };
@@ -69,6 +69,10 @@ export function validateAgentCommand(msg) {
         : { ok: false, error: 'invalid_transfer_control' };
     case 'transfer.done.ack':
       return typeof msg.transfer_id === 'string'
+        ? { ok: true }
+        : { ok: false, error: 'invalid_transfer_control' };
+    case 'transfer.nack':
+      return (typeof msg.transfer_id === 'string' && Number.isInteger(msg.seq))
         ? { ok: true }
         : { ok: false, error: 'invalid_transfer_control' };
     default:

@@ -18,30 +18,36 @@ test('resolveScreenshotConfig clamps and defaults values', () => {
 });
 
 test('dataUrlToMetaAndChunks emits compact keys and chunked payload', () => {
-  const dataUrl = 'data:image/jpeg;base64,ABCDEFGHIJKL';
+  const dataUrl = 'data:image/jpeg;base64,QUJDREVGR0hJSktM';
   const { meta, chunks } = dataUrlToMetaAndChunks(
     dataUrl,
     'r1',
     'tab',
+    'tx_00000001',
     { encodedWidth: 640, encodedHeight: 360, encodedQuality: 0.55, attempts: 2 },
     4
   );
 
-  assert.equal(meta.type, 'screenshot.meta');
-  assert.equal(meta.rid, 'r1');
-  assert.equal(meta.src, 'tab');
-  assert.equal(meta.m, 'image/jpeg');
-  assert.equal(meta.cs, 4);
-  assert.equal(meta.tc, 3);
-  assert.equal(meta.tch, 12);
-  assert.equal(meta.ew, 640);
-  assert.equal(meta.eh, 360);
-  assert.equal(meta.eq, 0.55);
-  assert.equal(meta.ea, 2);
+  assert.equal(meta.type, 'transfer.meta');
+  assert.equal(meta.request_id, 'r1');
+  assert.equal(meta.transfer_id, 'tx_00000001');
+  assert.equal(meta.source, 'tab');
+  assert.equal(meta.mime, 'image/jpeg');
+  assert.equal(meta.encoding, 'bin');
+  assert.equal(meta.chunk_size, 4);
+  assert.equal(meta.total_chunks, 3);
+  assert.equal(meta.total_bytes, 12);
+  assert.equal(meta.total_chars, 16);
+  assert.equal(meta.encoded_width, 640);
+  assert.equal(meta.encoded_height, 360);
+  assert.equal(meta.encoded_quality, 0.55);
+  assert.equal(meta.encode_attempts, 2);
 
   assert.equal(chunks.length, 3);
-  assert.deepEqual(chunks[0], { type: 'screenshot.chunk', rid: 'r1', src: 'tab', q: 0, d: 'ABCD' });
-  assert.deepEqual(chunks[1], { type: 'screenshot.chunk', rid: 'r1', src: 'tab', q: 1, d: 'EFGH' });
-  assert.deepEqual(chunks[2], { type: 'screenshot.chunk', rid: 'r1', src: 'tab', q: 2, d: 'IJKL' });
+  assert.equal(chunks[0].seq, 0);
+  assert.equal(chunks[1].seq, 1);
+  assert.equal(chunks[2].seq, 2);
+  assert.equal(new TextDecoder().decode(chunks[0].bytes), 'ABCD');
+  assert.equal(new TextDecoder().decode(chunks[1].bytes), 'EFGH');
+  assert.equal(new TextDecoder().decode(chunks[2].bytes), 'IJKL');
 });
-

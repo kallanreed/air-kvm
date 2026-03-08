@@ -43,6 +43,8 @@ void TransportMux::SetBleTxCharacteristic(NimBLECharacteristic* characteristic) 
 void TransportMux::EmitLog(const String& message) {
   const String escaped = JsonEscape(message);
   TxFrame frame{};
+  frame.is_binary = false;
+  frame.binary_len = 0;
   std::snprintf(
       frame.uart_line,
       sizeof(frame.uart_line),
@@ -55,6 +57,8 @@ void TransportMux::EmitLog(const String& message) {
 
 void TransportMux::EmitControl(const char* payload) {
   TxFrame frame{};
+  frame.is_binary = false;
+  frame.binary_len = 0;
   std::snprintf(
       frame.uart_line,
       sizeof(frame.uart_line),
@@ -71,6 +75,16 @@ void TransportMux::EmitControl(const char* payload) {
         reinterpret_cast<const uint8_t*>(ble_payload.data()), ble_payload.size());
     tx_char_->notify();
   }
+}
+
+void TransportMux::EmitBinaryFrame(const uint8_t* bytes, size_t len) {
+  if (bytes == nullptr || len == 0) return;
+  if (len > kMaxBinaryFrameLen) return;
+  TxFrame frame{};
+  frame.is_binary = true;
+  frame.binary_len = len;
+  std::memcpy(frame.binary, bytes, len);
+  EnqueueFrame(frame);
 }
 
 void TransportMux::EmitState(const DeviceState& state) {
@@ -93,6 +107,13 @@ void TransportMux::EnqueueFrame(const TxFrame& frame) {
 }
 
 void TransportMux::EmitFrameDirect(const TxFrame& frame) {
+  if (frame.is_binary) {
+    if (frame.binary_len > 0) {
+      Serial.write(frame.binary, frame.binary_len);
+      Serial.flush();
+    }
+    return;
+  }
   Serial.println(frame.uart_line);
 }
 

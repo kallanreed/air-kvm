@@ -298,6 +298,37 @@ export async function postEvent(payload, deps = {}) {
   }
 }
 
+export async function postBinary(bytes, deps = {}) {
+  const traceId = deps.traceId || null;
+  try {
+    const connected = await ensureConnected(deps);
+    if (!connected || !rxCharacteristic) return false;
+    if (!(bytes instanceof Uint8Array)) return false;
+    const supportsWithResponse = typeof rxCharacteristic.writeValueWithResponse === 'function';
+    debugLog('tx binary', {
+      traceId,
+      bytes: bytes.length,
+      mode: supportsWithResponse ? 'withResponse' : 'withoutResponse'
+    });
+    if (supportsWithResponse) {
+      try {
+        await rxCharacteristic.writeValueWithResponse(bytes);
+        return true;
+      } catch (err) {
+        debugLog('tx binary withResponse failed, falling back', {
+          traceId,
+          error: String(err?.message || err)
+        });
+      }
+    }
+    await rxCharacteristic.writeValueWithoutResponse(bytes);
+    return true;
+  } catch {
+    debugLog('postBinary failed', { traceId });
+    return false;
+  }
+}
+
 function onBleBytes(text, onCommand) {
   if (!text || typeof text !== 'string') return;
   debugLog('rx bytes', { bytes: text.length, preview: text.slice(0, 160) });

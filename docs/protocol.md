@@ -1,15 +1,15 @@
 # Protocol (Current, March 2026)
 
 ## Overview
-- UART transport uses JSON lines (`\n` delimited).
-- Firmware emits multiplexed frames:
-  - `{"ch":"ctrl","msg":{...}}` for protocol payloads
-  - `{"ch":"log","msg":"..."}` for diagnostics
-- BLE bridge carries JSON command/event payloads between extension and firmware.
+- UART transport is a mixed stream:
+  - JSON lines (`\n` delimited) for control and logs.
+  - Binary transfer frames for screenshot chunk payloads.
+- Firmware emits multiplexed JSON control/log frames:
+  - `{"ch":"ctrl","msg":{...}}`
+  - `{"ch":"log","msg":"..."}`
+- BLE bridge remains command/event JSON for control, plus raw binary chunk writes for screenshot payload.
 
-## Core Device Commands (UART/BLE)
-Supported command shapes:
-
+## Core Commands
 ```json
 {"type":"mouse.move_rel","dx":10,"dy":-4}
 {"type":"mouse.move_abs","x":1200,"y":340}
@@ -20,8 +20,8 @@ Supported command shapes:
 {"type":"fw.version.request"}
 {"type":"dom.snapshot.request","request_id":"req-1"}
 {"type":"tabs.list.request","request_id":"req-2"}
-{"type":"screenshot.request","source":"tab","request_id":"req-3"}
-{"type":"screenshot.request","source":"desktop","request_id":"req-4"}
+{"type":"screenshot.request","source":"tab","request_id":"req-3","encoding":"bin"}
+{"type":"screenshot.request","source":"desktop","request_id":"req-4","encoding":"bin"}
 ```
 
 `screenshot.request` optional fields:
@@ -30,61 +30,63 @@ Supported command shapes:
 - `quality` (number)
 - `max_chars` (int)
 - `tab_id` (int, tab source only)
-- `encoding` (`b64` or `b64z`)
+- `encoding` (`bin` only)
 
-## Core Responses / Events
-Examples:
-
+## Core Responses
 ```json
 {"ch":"ctrl","msg":{"type":"state","busy":false}}
-{"ch":"ctrl","msg":{"type":"fw.version","version":"dev","built_at":"Mar  7 2026 12:34:56"}}
+{"ch":"ctrl","msg":{"type":"fw.version","version":"dev","built_at":"..."}}
 {"ch":"ctrl","msg":{"type":"dom.snapshot","request_id":"req-1","summary":{...}}}
 {"ch":"ctrl","msg":{"type":"tabs.list","request_id":"req-2","tabs":[...]}}
 {"ch":"ctrl","msg":{"type":"dom.snapshot.error","request_id":"req-1","error":"..."}}
 {"ch":"ctrl","msg":{"type":"tabs.list.error","request_id":"req-2","error":"..."}}
 {"ch":"ctrl","msg":{"ok":true}}
-{"ch":"log","msg":"rx.ble {\"type\":\"state.request\"}"}
 ```
 
-Boot frame includes build metadata:
+## Screenshot Transfer Protocol (Binary-Only)
 
+### JSON control plane
+Extension starts transfer with:
 ```json
-{"type":"boot","fw":"air-kvm-ctrl-cb01","version":"dev","built_at":"Mar  7 2026 12:34:56"}
+{"type":"transfer.meta","request_id":"req-3","transfer_id":"tx_12ab34cd","source":"tab","mime":"image/jpeg","encoding":"bin","chunk_size":160,"total_chunks":304,"total_bytes":27312,"total_chars":36416}
 ```
 
-## Screenshot Transfer Protocol (Current)
-
-### Transfer-session framing (primary path)
-Extension sends:
-
+Extension ends transfer with:
 ```json
-{"type":"transfer.meta","request_id":"req-3","transfer_id":"tx_...","source":"tab","mime":"image/jpeg","encoding":"b64","chunk_size":120,"total_chunks":235,"total_chars":28156}
-{"type":"transfer.chunk","request_id":"req-3","transfer_id":"tx_...","source":"tab","seq":0,"data":"..."}
-{"type":"transfer.done","request_id":"req-3","transfer_id":"tx_...","source":"tab","total_chunks":235}
+{"type":"transfer.done","request_id":"req-3","transfer_id":"tx_12ab34cd","source":"tab","total_chunks":304}
 ```
 
-MCP may send control back while collecting:
-
+MCP control responses:
 ```json
-{"type":"transfer.ack","request_id":"req-3","transfer_id":"tx_...","highest_contiguous_seq":63}
-{"type":"transfer.resume","request_id":"req-3","transfer_id":"tx_...","from_seq":64}
-{"type":"transfer.done.ack","request_id":"req-3","transfer_id":"tx_..."}
-{"type":"transfer.cancel","request_id":"req-3","transfer_id":"tx_..."}
+{"type":"transfer.ack","request_id":"req-3","transfer_id":"tx_12ab34cd","highest_contiguous_seq":127}
+{"type":"transfer.nack","request_id":"req-3","transfer_id":"tx_12ab34cd","seq":42,"reason":"crc_mismatch"}
+{"type":"transfer.resume","request_id":"req-3","transfer_id":"tx_12ab34cd","from_seq":128}
+{"type":"transfer.done.ack","request_id":"req-3","transfer_id":"tx_12ab34cd"}
 {"type":"transfer.reset","request_id":"req-3"}
+{"type":"transfer.error","request_id":"req-3","transfer_id":"tx_12ab34cd","code":"no_such_transfer"}
 ```
 
-Error/administrative frames:
+### Binary chunk frame (extension -> firmware -> MCP)
+Each chunk is sent as a binary frame:
 
-```json
-{"type":"transfer.error","request_id":"req-3","transfer_id":"tx_...","code":"no_such_transfer"}
-{"type":"transfer.cancel.ok","request_id":"req-3","transfer_id":"tx_..."}
-{"type":"transfer.reset.ok","request_id":"req-3"}
-```
+- `magic0` (1 byte): `0x41` (`'A'`)
+- `magic1` (1 byte): `0x4B` (`'K'`)
+- `version` (1 byte): `0x01`
+- `frame_type` (1 byte): `0x01` (transfer chunk)
+- `transfer_id` (4 bytes, LE, uint32)
+- `seq` (4 bytes, LE, uint32)
+- `payload_len` (2 bytes, LE, uint16)
+- `payload` (`payload_len` bytes)
+- `crc32` (4 bytes, LE, uint32)
 
-Notes:
-- `transfer_id` is required for resume/ack/cancel semantics.
-- If `transfer_id` is unknown, extension returns `transfer.error` with `code:"no_such_transfer"`.
-- Extension keeps transfer state in memory with TTL pruning.
+CRC scope:
+- CRC32 is computed over bytes from `version` through the end of `payload`.
+- `magic` and trailing `crc32` field are excluded.
+
+Receiver behavior:
+- Reject frame on bad magic/version/type/length/CRC.
+- On reject with known `transfer_id` and `seq`, MCP sends `transfer.nack`.
+- Extension retransmits the specific `seq` on `transfer.nack`.
 
 ## MCP Tool Contract
 Available tools:
@@ -94,13 +96,8 @@ Available tools:
 - `airkvm_screenshot_tab`
 - `airkvm_screenshot_desktop`
 
-`airkvm_screenshot_tab` options:
-- `request_id`, `max_width`, `max_height`, `quality`, `max_chars`, `tab_id`, `encoding`
-
-`airkvm_screenshot_desktop` options:
-- `request_id`, `max_width`, `max_height`, `quality`, `max_chars`, `encoding`
-
-Structured tool outputs for DOM/tabs/screenshot are JSON payloads in text content.
+Screenshot tools return structured JSON with:
+- `request_id`, `source`, `mime`, `total_chunks`, `total_chars`, `encoding`, `base64`
 
 ## BLE Manual Testing
 GATT profile:
@@ -108,4 +105,4 @@ GATT profile:
 - RX (write/writeWithoutResponse): `6E400102-B5A3-F393-E0A9-E50E24DCCB01`
 - TX (notify/read): `6E400103-B5A3-F393-E0A9-E50E24DCCB01`
 
-Send UTF-8 JSON payloads to RX characteristic. Newline is optional over BLE.
+Control messages are JSON UTF-8 payloads; screenshot chunk payloads are raw binary frames.

@@ -1,4 +1,5 @@
 import { SerialPort } from 'serialport';
+import { tryExtractFrameFromBuffer } from './binary_frame.js';
 
 export function parseDeviceLine(line) {
   let parsed;
@@ -32,7 +33,7 @@ export class UartTransport {
     this.commandTimeoutMs = commandTimeoutMs;
     this.debug = debug;
     this.serialPort = null;
-    this.readBuffer = '';
+    this.readBuffer = Buffer.alloc(0);
     this.currentWaiter = null;
     this.sendQueue = Promise.resolve();
     this.opened = false;
@@ -92,14 +93,30 @@ export class UartTransport {
   }
 
   onData(chunk) {
-    this.readBuffer += chunk.toString('utf8');
-    while (true) {
-      const newline = this.readBuffer.indexOf('\n');
+    const incoming = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    this.readBuffer = Buffer.concat([this.readBuffer, incoming]);
+    while (this.readBuffer.length > 0) {
+      const maybeBinary = tryExtractFrameFromBuffer(this.readBuffer);
+      if (maybeBinary) {
+        this.readBuffer = this.readBuffer.subarray(maybeBinary.consumed);
+        const frame = maybeBinary.frame;
+        this.recentFrames.push(frame);
+        if (this.recentFrames.length > 200) {
+          this.recentFrames.shift();
+        }
+        if (this.currentWaiter) {
+          this.currentWaiter.onFrame(frame);
+        }
+        continue;
+      }
+
+      const newline = this.readBuffer.indexOf(0x0a);
       if (newline === -1) {
         break;
       }
-      const line = this.readBuffer.slice(0, newline).replace(/\r$/, '');
-      this.readBuffer = this.readBuffer.slice(newline + 1);
+      const lineBytes = this.readBuffer.subarray(0, newline);
+      this.readBuffer = this.readBuffer.subarray(newline + 1);
+      const line = lineBytes.toString('utf8').replace(/\r$/, '');
       if (line.length > 0) {
         this.onLine(line);
       }
@@ -194,7 +211,7 @@ export class UartTransport {
           onFrame: (frame) => {
             frames.push(frame);
             const msg = frame.kind === 'ctrl' || frame.kind === 'legacy_ctrl' ? frame.msg : null;
-            if (responseCollector && msg) {
+            if (responseCollector) {
               const collected = responseCollector(msg, frame, frames);
               if (collected?.done) {
                 if (Array.isArray(collected.outbound) && collected.outbound.length > 0) {

@@ -30,6 +30,7 @@ enum class CommandType {
   kTransferDone,
   kTransferDoneAck,
   kTransferAck,
+  kTransferNack,
   kTransferResume,
   kTransferCancel,
   kTransferCancelOk,
