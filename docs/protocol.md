@@ -1,10 +1,14 @@
-# Protocol (POC v0)
+# Protocol (Current, March 2026)
 
-## Agent <-> Firmware (Serial JSONL)
+## Overview
+- UART transport uses JSON lines (`\n` delimited).
+- Firmware emits multiplexed frames:
+  - `{"ch":"ctrl","msg":{...}}` for protocol payloads
+  - `{"ch":"log","msg":"..."}` for diagnostics
+- BLE bridge carries JSON command/event payloads between extension and firmware.
 
-Each message is one JSON object terminated by `\n`.
-
-### Commands
+## Core Device Commands (UART/BLE)
+Supported command shapes:
 
 ```json
 {"type":"mouse.move_rel","dx":10,"dy":-4}
@@ -14,127 +18,94 @@ Each message is one JSON object terminated by `\n`.
 {"type":"state.request"}
 {"type":"state.set","busy":true}
 {"type":"fw.version.request"}
+{"type":"dom.snapshot.request","request_id":"req-1"}
+{"type":"tabs.list.request","request_id":"req-2"}
+{"type":"screenshot.request","source":"tab","request_id":"req-3"}
+{"type":"screenshot.request","source":"desktop","request_id":"req-4"}
 ```
 
-### Responses/events (UART multiplex framing)
+`screenshot.request` optional fields:
+- `max_width` (int)
+- `max_height` (int)
+- `quality` (number)
+- `max_chars` (int)
+- `tab_id` (int, tab source only)
+- `encoding` (`b64` or `b64z`)
+
+## Core Responses / Events
+Examples:
 
 ```json
-{"ch":"ctrl","msg":{"type":"event","event":"mouse.move_rel"}}
 {"ch":"ctrl","msg":{"type":"state","busy":false}}
 {"ch":"ctrl","msg":{"type":"fw.version","version":"dev","built_at":"Mar  7 2026 12:34:56"}}
+{"ch":"ctrl","msg":{"type":"dom.snapshot","request_id":"req-1","summary":{...}}}
+{"ch":"ctrl","msg":{"type":"tabs.list","request_id":"req-2","tabs":[...]}}
+{"ch":"ctrl","msg":{"type":"dom.snapshot.error","request_id":"req-1","error":"..."}}
+{"ch":"ctrl","msg":{"type":"tabs.list.error","request_id":"req-2","error":"..."}}
 {"ch":"ctrl","msg":{"ok":true}}
 {"ch":"log","msg":"rx.ble {\"type\":\"state.request\"}"}
 ```
 
-`ctrl` carries protocol payloads. `log` carries diagnostic strings.  
-Firmware also accepts legacy plain JSON command lines on UART and BLE RX.
-
-Boot payload now includes build metadata:
+Boot frame includes build metadata:
 
 ```json
-{"type":"boot","fw":"air-kvm-poc","version":"dev","built_at":"Mar  7 2026 12:34:56"}
+{"type":"boot","fw":"air-kvm-ctrl-cb01","version":"dev","built_at":"Mar  7 2026 12:34:56"}
 ```
 
-## MCP tool contract
+## Screenshot Transfer Protocol (Current)
 
-Tool: `airkvm_send`
-- Input: `{ "command": <serial command object> }`
-- Output text: transport-forwarding status or device rejection/timeout
+### Transfer-session framing (primary path)
+Extension sends:
 
-Tool: `airkvm_screenshot_tab` / `airkvm_screenshot_desktop`
-- Optional input tuning:
-  - `request_id` (string)
-  - `max_width` (int, 160..1920)
-  - `max_height` (int, 120..1080)
-  - `quality` (float, 0.3..0.9)
-  - `max_chars` (int, 20000..200000)
-- Output text content is JSON with reassembled screenshot payload.
+```json
+{"type":"transfer.meta","request_id":"req-3","transfer_id":"tx_...","source":"tab","mime":"image/jpeg","encoding":"b64","chunk_size":120,"total_chunks":235,"total_chars":28156}
+{"type":"transfer.chunk","request_id":"req-3","transfer_id":"tx_...","source":"tab","seq":0,"data":"..."}
+{"type":"transfer.done","request_id":"req-3","transfer_id":"tx_...","source":"tab","total_chunks":235}
+```
+
+MCP may send control back while collecting:
+
+```json
+{"type":"transfer.ack","request_id":"req-3","transfer_id":"tx_...","highest_contiguous_seq":63}
+{"type":"transfer.resume","request_id":"req-3","transfer_id":"tx_...","from_seq":64}
+{"type":"transfer.done.ack","request_id":"req-3","transfer_id":"tx_..."}
+{"type":"transfer.cancel","request_id":"req-3","transfer_id":"tx_..."}
+{"type":"transfer.reset","request_id":"req-3"}
+```
+
+Error/administrative frames:
+
+```json
+{"type":"transfer.error","request_id":"req-3","transfer_id":"tx_...","code":"no_such_transfer"}
+{"type":"transfer.cancel.ok","request_id":"req-3","transfer_id":"tx_..."}
+{"type":"transfer.reset.ok","request_id":"req-3"}
+```
+
+Notes:
+- `transfer_id` is required for resume/ack/cancel semantics.
+- If `transfer_id` is unknown, extension returns `transfer.error` with `code:"no_such_transfer"`.
+- Extension keeps transfer state in memory with TTL pruning.
+
+## MCP Tool Contract
+Available tools:
+- `airkvm_send`
+- `airkvm_list_tabs`
+- `airkvm_dom_snapshot`
+- `airkvm_screenshot_tab`
+- `airkvm_screenshot_desktop`
+
+`airkvm_screenshot_tab` options:
+- `request_id`, `max_width`, `max_height`, `quality`, `max_chars`, `tab_id`, `encoding`
+
+`airkvm_screenshot_desktop` options:
+- `request_id`, `max_width`, `max_height`, `quality`, `max_chars`, `encoding`
+
+Structured tool outputs for DOM/tabs/screenshot are JSON payloads in text content.
 
 ## BLE Manual Testing
-
-Device GATT profile:
-- Service UUID: `6E400101-B5A3-F393-E0A9-E50E24DCCB01`
-- RX (write/write-no-response): `6E400102-B5A3-F393-E0A9-E50E24DCCB01`
+GATT profile:
+- Service: `6E400101-B5A3-F393-E0A9-E50E24DCCB01`
+- RX (write/writeWithoutResponse): `6E400102-B5A3-F393-E0A9-E50E24DCCB01`
 - TX (notify/read): `6E400103-B5A3-F393-E0A9-E50E24DCCB01`
 
-Important:
-- Write UTF-8 JSON text to RX characteristic (not numbers like `8`).
-- Newline is optional for BLE writes.
-
-Example valid payloads:
-
-```json
-{"type":"state.request"}
-{"type":"mouse.move_rel","dx":10,"dy":-4}
-{"type":"mouse.move_abs","x":1200,"y":340}
-{"type":"mouse.click","button":"left"}
-{"type":"key.tap","key":"Enter"}
-{"type":"fw.version.request"}
-```
-
-Expected TX notifications after `{"type":"state.request"}`:
-
-```json
-{"type":"state","busy":false}
-{"ok":true}
-```
-
-Set busy example:
-
-```json
-{"type":"state.set","busy":true}
-```
-
-Expected:
-
-```json
-{"type":"state","busy":true}
-{"ok":true}
-```
-
-Expected UART monitor output (framed):
-
-```json
-{"ch":"log","msg":"rx.ble {\"type\":\"state.request\"}"}
-{"ch":"ctrl","msg":{"type":"state","busy":false}}
-{"ch":"ctrl","msg":{"ok":true}}
-```
-
-Firmware version check example:
-
-```json
-{"type":"fw.version.request"}
-```
-
-Expected:
-
-```json
-{"type":"fw.version","version":"dev","built_at":"Mar  7 2026 12:34:56"}
-{"ok":true}
-```
-
-Invalid payload behavior:
-
-```json
-{"ok":false,"error":"invalid_command"}
-```
-
-## Planned additions
-
-1. Screenshot framing
-- Compact framed metadata object:
-  - `type: "screenshot.meta"`
-  - `rid` request id
-  - `src` source (`tab|desktop`)
-  - `m` mime (`image/jpeg`)
-  - `cs` chunk size
-  - `tc` total chunks
-  - `tch` total base64 chars
-  - optional encode stats: `ew`, `eh`, `eq`, `ea`
-- Compact chunk stream:
-  - `type: "screenshot.chunk"`
-  - `rid`, `src`, `q` (seq), `d` (base64 data slice)
-
-2. Busy/DOM channel
-- extension emits `busy.changed`, `dom.summary`
-- transport/collection path intentionally separate from MCP
+Send UTF-8 JSON payloads to RX characteristic. Newline is optional over BLE.

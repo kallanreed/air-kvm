@@ -182,3 +182,6 @@
     - `cd mcp && node --test` => pass
     - `cd extension && node --test` => pass
     - `cd firmware && pio test -e native` => pass
+- Protocol docs cleanup (March 7, 2026, late):
+  - Rewrote `docs/protocol.md` to match current protocol and removed all "legacy" framing language.
+  - `transfer.*` screenshot session flow is now documented as the authoritative path.
