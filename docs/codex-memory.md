@@ -148,3 +148,8 @@
 - Firmware host tests: `cd firmware && pio test -e native`
 - MCP live run: `cd mcp && AIRKVM_SERIAL_PORT=/dev/cu.usbserial-0001 node src/index.js`
 - Live debug probe: `AIRKVM_UART_DEBUG=1 AIRKVM_SERIAL_TIMEOUT_MS=6000 ...`
+- Screenshot stall instrumentation update (March 7, 2026, late):
+  - Service worker now wraps capture stage in explicit timeout (`screenshot_capture_timeout`, 25s).
+  - Added stage logs in `sendScreenshot`: `capture begin`, `capture done`, and `compression` selection.
+  - Added explicit ignore logging for non-command BLE payloads (for example `{ "ok": true }`) in `handleBleCommand` to reduce false-positive debugging paths.
+  - Verification: `cd extension && node --test` and `cd mcp && node --test test/server.test.js test/tools.test.js` both pass after changes.

@@ -1,6 +1,7 @@
 import { dataUrlToMetaAndChunks, resolveScreenshotConfig } from './screenshot_protocol.js';
 const kBleBridgePagePath = 'src/ble_bridge.html';
 const kDebug = true;
+const kScreenshotCaptureTimeoutMs = 25000;
 let lastAutomationTabId = null;
 let bridgeTraceSeq = 0;
 
@@ -140,6 +141,15 @@ function makeRequestId() {
   return `${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
 }
 
+function withTimeout(promise, ms, errorCode) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(errorCode)), ms);
+    })
+  ]);
+}
+
 async function captureTabPng(config) {
   const tab = await resolveTargetTab(config.tabId || null);
   if (!tab?.id) {
@@ -267,10 +277,33 @@ async function sendScreenshot(command) {
   const requestId = command.request_id || makeRequestId();
   const config = resolveScreenshotConfig(command);
   config.tabId = Number.isInteger(command?.tab_id) ? command.tab_id : null;
-  const encoded = source === 'desktop' ? await captureDesktopPng(config) : await captureTabPng(config);
+  debugLog('sendScreenshot capture begin', {
+    source,
+    requestId,
+    tabId: config.tabId || null,
+    encodingRequested: config.encoding
+  });
+  const encoded = await withTimeout(
+    source === 'desktop' ? captureDesktopPng(config) : captureTabPng(config),
+    kScreenshotCaptureTimeoutMs,
+    'screenshot_capture_timeout'
+  );
+  debugLog('sendScreenshot capture done', {
+    source,
+    requestId,
+    encodedWidth: encoded.encodedWidth,
+    encodedHeight: encoded.encodedHeight,
+    encodedQuality: encoded.encodedQuality
+  });
   const compression = config.encoding === 'b64z'
     ? await tryGzipDataUrlBase64(encoded.dataUrl)
     : { encoding: 'b64', payloadBase64: null };
+  debugLog('sendScreenshot compression', {
+    source,
+    requestId,
+    requested: config.encoding,
+    selected: compression.encoding
+  });
   const { meta, chunks } = dataUrlToMetaAndChunks(
     encoded.dataUrl,
     requestId,
@@ -356,7 +389,10 @@ async function sendTabsList(command) {
 
 async function handleBleCommand(command) {
   debugLog('handleBleCommand', command);
-  if (!command || typeof command.type !== 'string') return;
+  if (!command || typeof command.type !== 'string') {
+    debugLog('handleBleCommand ignore non-command payload', command);
+    return;
+  }
   if (command.type === 'dom.snapshot.request') {
     try {
       await sendDomSnapshot(command);
