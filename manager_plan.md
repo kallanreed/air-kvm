@@ -52,5 +52,9 @@ Planned sequence:
 3. [ ] Run bench validation matrix (browser-only, HID-only, mixed load, reconnect/sleep-wake faults).
    - Initial checkpoint complete: HID pairing + browser coexistence + open_tab/js_exec/screenshot + HID command interleave.
    - Execution checklist: `docs/final-validation-checklist.md`
-   - Blocker observed in short mixed soak: `tabs.list` request timed out repeatedly while `js.exec`/`screenshot`/HID remained successful.
+   - Automated validation now passing:
+     - `browser` lane: 10/10 and 50/50 pass
+     - `hid` lane: 10/10 and 50/50 pass
+     - `mixed` lane: 20/20 and 50/50 pass
+   - Remaining to close step: manual reconnect lane (5 cycles) + sleep/wake lane (3 cycles).
 4. [ ] Canary rollout with explicit go/no-go gates and rollback path.
