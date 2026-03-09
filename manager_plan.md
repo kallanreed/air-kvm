@@ -51,5 +51,6 @@ Planned sequence:
 2. [x] Add HID-enabled firmware build variant behind flag; keep default build HID-off.
 3. [ ] Run bench validation matrix (browser-only, HID-only, mixed load, reconnect/sleep-wake faults).
    - Initial checkpoint complete: HID pairing + browser coexistence + open_tab/js_exec/screenshot + HID command interleave.
+   - Execution checklist: `docs/final-validation-checklist.md`
    - Blocker observed in short mixed soak: `tabs.list` request timed out repeatedly while `js.exec`/`screenshot`/HID remained successful.
 4. [ ] Canary rollout with explicit go/no-go gates and rollback path.
