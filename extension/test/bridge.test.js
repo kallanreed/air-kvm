@@ -287,6 +287,56 @@ test('postBinary emits tx telemetry with binary payload type', async () => {
   )), true);
 });
 
+test('postEvent chunks large control payload across multiple BLE writes', async () => {
+  __resetBleForTest();
+  const writes = [];
+  const rx = {
+    writeValueWithoutResponse: async (value) => {
+      writes.push(new Uint8Array(value));
+    }
+  };
+  const tx = {
+    addEventListener: () => {},
+    startNotifications: async () => {}
+  };
+  const service = {
+    getCharacteristic: async (uuid) => (String(uuid).endsWith('03-b5a3-f393-e0a9-e50e24dccb01') ? tx : rx)
+  };
+  const server = {
+    connected: true,
+    getPrimaryService: async () => service
+  };
+  const device = {
+    gatt: { connected: true, connect: async () => server },
+    addEventListener: () => {}
+  };
+  const navigatorLike = {
+    bluetooth: {
+      requestDevice: async () => device
+    }
+  };
+
+  const connected = await connectBle({ navigatorLike });
+  assert.equal(connected, true);
+
+  const bigTabs = [];
+  for (let i = 0; i < 60; i += 1) {
+    bigTabs.push({ id: i + 1, window_id: 1, active: i === 0, title: `Tab ${i}`, url: `https://example.com/${i}` });
+  }
+  const ok = await postEvent({ type: 'tabs.list', request_id: 'tabs-big-1', tabs: bigTabs }, { traceId: 'trace-big-1' });
+  assert.equal(ok, true);
+  assert.equal(writes.length > 1, true);
+
+  const total = writes.reduce((sum, chunk) => sum + chunk.length, 0);
+  const merged = new Uint8Array(total);
+  let cursor = 0;
+  for (const chunk of writes) {
+    merged.set(chunk, cursor);
+    cursor += chunk.length;
+  }
+  assert.equal(merged[merged.length - 1], 10); // '\n'
+});
+
 test('disconnectBle clears connected device metadata', async () => {
   __resetBleForTest();
   const rx = {

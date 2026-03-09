@@ -935,12 +935,12 @@ async function sendTabsList(command) {
       title: tab.title || '',
       url: tab.url || ''
     }));
-  await postEventViaBridge({
+  await postEventOrThrow({
     type: 'tabs.list',
     request_id: requestId,
     tabs: filtered,
     ts: Date.now()
-  });
+  }, 'tabs_list_send_failed');
 }
 
 async function sendOpenTab(command) {

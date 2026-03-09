@@ -203,21 +203,21 @@ export function createResponseCollector(name, command) {
   if (name === 'airkvm_dom_snapshot') {
     const requestId = command.request_id;
     return (msg) => {
-      if (typeof msg.ok === 'boolean' && msg.ok === false) {
+      if (typeof msg?.ok === 'boolean' && msg.ok === false) {
         return {
           done: true,
           ok: false,
           data: { request_id: requestId, error: msg.error || 'device_rejected', device: msg }
         };
       }
-      if (msg.type === 'dom.snapshot' && msg.request_id === requestId) {
+      if (msg?.type === 'dom.snapshot' && msg?.request_id === requestId) {
         return {
           done: true,
           ok: true,
           data: { request_id: requestId, snapshot: msg }
         };
       }
-      if (msg.type === 'dom.snapshot.error' && msg.request_id === requestId) {
+      if (msg?.type === 'dom.snapshot.error' && msg?.request_id === requestId) {
         return {
           done: true,
           ok: false,
@@ -231,14 +231,14 @@ export function createResponseCollector(name, command) {
   if (name === 'airkvm_list_tabs') {
     const requestId = command.request_id;
     return (msg) => {
-      if (typeof msg.ok === 'boolean' && msg.ok === false) {
+      if (typeof msg?.ok === 'boolean' && msg.ok === false) {
         return {
           done: true,
           ok: false,
           data: { request_id: requestId, error: msg.error || 'device_rejected', device: msg }
         };
       }
-      if (msg.type === 'tabs.list' && msg.request_id === requestId) {
+      if (msg?.type === 'tabs.list' && msg?.request_id === requestId) {
         return {
           done: true,
           ok: true,
@@ -248,7 +248,7 @@ export function createResponseCollector(name, command) {
           }
         };
       }
-      if (msg.type === 'tabs.list.error' && msg.request_id === requestId) {
+      if (msg?.type === 'tabs.list.error' && msg?.request_id === requestId) {
         return {
           done: true,
           ok: false,
@@ -262,21 +262,21 @@ export function createResponseCollector(name, command) {
   if (name === 'airkvm_open_tab') {
     const requestId = command.request_id;
     return (msg) => {
-      if (typeof msg.ok === 'boolean' && msg.ok === false) {
+      if (typeof msg?.ok === 'boolean' && msg.ok === false) {
         return {
           done: true,
           ok: false,
           data: { request_id: requestId, error: msg.error || 'device_rejected', device: msg }
         };
       }
-      if (msg.type === 'tab.open' && msg.request_id === requestId) {
+      if (msg?.type === 'tab.open' && msg?.request_id === requestId) {
         return {
           done: true,
           ok: true,
           data: msg
         };
       }
-      if (msg.type === 'tab.open.error' && msg.request_id === requestId) {
+      if (msg?.type === 'tab.open.error' && msg?.request_id === requestId) {
         return {
           done: true,
           ok: false,
@@ -290,21 +290,21 @@ export function createResponseCollector(name, command) {
   if (name === 'airkvm_exec_js_tab') {
     const requestId = command.request_id;
     return (msg) => {
-      if (typeof msg.ok === 'boolean' && msg.ok === false) {
+      if (typeof msg?.ok === 'boolean' && msg.ok === false) {
         return {
           done: true,
           ok: false,
           data: { request_id: requestId, error: msg.error || 'device_rejected', device: msg }
         };
       }
-      if (msg.type === 'js.exec.result' && msg.request_id === requestId) {
+      if (msg?.type === 'js.exec.result' && msg?.request_id === requestId) {
         return {
           done: true,
           ok: true,
           data: msg
         };
       }
-      if (msg.type === 'js.exec.error' && msg.request_id === requestId) {
+      if (msg?.type === 'js.exec.error' && msg?.request_id === requestId) {
         return {
           done: true,
           ok: false,
@@ -431,10 +431,10 @@ export function createResponseCollector(name, command) {
       }
 
       if (!msg || typeof msg !== 'object') return null;
-      const msgRequestId = msg.request_id ?? msg.rid;
+      const msgRequestId = msg?.request_id ?? msg?.rid;
       const msgSource = msg.source ?? msg.src;
       const msgError = msg.error ?? msg.e;
-      if (typeof msg.ok === 'boolean' && msg.ok === false) {
+      if (typeof msg?.ok === 'boolean' && msg.ok === false) {
         return {
           done: true,
           ok: false,
@@ -444,7 +444,7 @@ export function createResponseCollector(name, command) {
       if (msgRequestId !== requestId) {
         return null;
       }
-      if (msg.type === 'screenshot.error') {
+      if (msg?.type === 'screenshot.error') {
         return {
           done: true,
           ok: false,
@@ -456,7 +456,7 @@ export function createResponseCollector(name, command) {
           }
         };
       }
-      if (msg.type === 'transfer.error' && msgRequestId === requestId) {
+      if (msg?.type === 'transfer.error' && msgRequestId === requestId) {
         const code = msg.code || msgError || 'transfer_error';
         return {
           done: true,
@@ -469,10 +469,10 @@ export function createResponseCollector(name, command) {
           }
         };
       }
-      if (msg.type === 'transfer.meta') {
+      if (msg?.type === 'transfer.meta') {
         meta = msg;
         transferId = msg.transfer_id || msg.tid || transferId;
-      } else if (msg.type === 'transfer.done') {
+      } else if (msg?.type === 'transfer.done') {
         const doneTransferId = msg.transfer_id || msg.tid || null;
         if (transferId && doneTransferId && doneTransferId !== transferId) {
           return null;

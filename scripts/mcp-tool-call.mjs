@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from 'node:child_process';
+import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -10,6 +12,23 @@ const mcpDir = path.join(repoRoot, 'mcp');
 
 const serialPort = process.env.AIRKVM_SERIAL_PORT || '/dev/cu.usbserial-0001';
 const timeoutMs = Number.parseInt(process.env.AIRKVM_TOOL_TIMEOUT_MS || '120000', 10);
+
+function positiveIntFromEnv(name, fallback) {
+  const value = Number.parseInt(process.env[name] || '', 10);
+  if (!Number.isInteger(value) || value <= 0) return fallback;
+  return value;
+}
+
+function sanitizeForPath(value) {
+  return String(value || 'default').replace(/[^a-zA-Z0-9._-]/g, '_');
+}
+
+const defaultQueueLockPath = path.join(os.tmpdir(), `airkvm-tool-call-${sanitizeForPath(serialPort)}.lock`);
+const queueLockPath = process.env.AIRKVM_TOOL_QUEUE_LOCK || defaultQueueLockPath;
+const queuePollMs = positiveIntFromEnv('AIRKVM_TOOL_QUEUE_POLL_MS', 100);
+const queueWaitMs = positiveIntFromEnv('AIRKVM_TOOL_QUEUE_WAIT_MS', 120000);
+const queueStaleMs = positiveIntFromEnv('AIRKVM_TOOL_QUEUE_STALE_MS', Math.max(queueWaitMs * 2, 300000));
+const queueSettleMs = positiveIntFromEnv('AIRKVM_TOOL_QUEUE_SETTLE_MS', 250);
 
 function usage() {
   process.stderr.write(
@@ -26,6 +45,81 @@ function parseJsonArg(raw, fallback) {
     return parsed && typeof parsed === 'object' ? parsed : fallback;
   } catch {
     return fallback;
+  }
+}
+
+async function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function pidLooksAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function clearStaleLockIfNeeded() {
+  try {
+    const content = await fs.readFile(queueLockPath, 'utf8');
+    const parsed = JSON.parse(content);
+    const pid = Number.parseInt(String(parsed?.pid ?? ''), 10);
+    const createdAt = Number.parseInt(String(parsed?.created_at ?? ''), 10);
+    const ageMs = Number.isInteger(createdAt) ? Date.now() - createdAt : queueStaleMs + 1;
+    const pidAlive = pidLooksAlive(pid);
+    if (!pidAlive || (!Number.isInteger(pid) && ageMs > queueStaleMs)) {
+      await fs.unlink(queueLockPath);
+    }
+  } catch {
+    try {
+      const stats = await fs.stat(queueLockPath);
+      if (Date.now() - stats.mtimeMs > queueStaleMs) {
+        await fs.unlink(queueLockPath);
+      }
+    } catch {
+      // Ignore stat/unlink errors; lock may have disappeared.
+    }
+  }
+}
+
+async function withQueueLock(fn) {
+  const start = Date.now();
+  let lockHandle = null;
+  while (!lockHandle) {
+    try {
+      lockHandle = await fs.open(queueLockPath, 'wx');
+    } catch (err) {
+      if (err?.code !== 'EEXIST') throw err;
+      await clearStaleLockIfNeeded();
+      if (Date.now() - start > queueWaitMs) {
+        throw new Error('tool_queue_timeout');
+      }
+      await sleep(queuePollMs);
+    }
+  }
+
+  try {
+    await lockHandle.writeFile(JSON.stringify({ pid: process.pid, created_at: Date.now() }));
+    const result = await fn();
+    // Keep lock slightly longer to avoid UART reopen races across processes.
+    if (queueSettleMs > 0) {
+      await sleep(queueSettleMs);
+    }
+    return result;
+  } finally {
+    try {
+      await lockHandle.close();
+    } catch {
+      // Ignore close failures.
+    }
+    try {
+      await fs.unlink(queueLockPath);
+    } catch {
+      // Ignore unlink failures.
+    }
   }
 }
 
@@ -120,7 +214,7 @@ function run() {
   });
 }
 
-run().catch((err) => {
+withQueueLock(run).catch((err) => {
   process.stderr.write(`${String(err?.message || err)}\n`);
   process.exit(1);
 });

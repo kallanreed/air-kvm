@@ -155,22 +155,22 @@ void AirKvmApp::ProcessBleWrite(const std::string& value) {
     return;
   }
 
-  bool saw_newline = false;
   for (char c : value) {
     if (c == '\n') {
-      saw_newline = true;
       router_.ProcessLine(ble_buffer_, "ble");
       ble_buffer_ = "";
       continue;
     }
     if (c != '\r') {
       ble_buffer_ += c;
+      if (ble_buffer_.length() > kMaxBleControlBufferLen) {
+        transport_.EmitLog("{\"evt\":\"ble.ctrl.drop\",\"reason\":\"buffer_overflow\"}");
+        ble_buffer_ = "";
+      }
     }
   }
-  if (!saw_newline && ble_buffer_.length() > 0) {
-    router_.ProcessLine(ble_buffer_, "ble");
-    ble_buffer_ = "";
-  }
+  // Keep buffering partial BLE control payloads until a newline-delimited
+  // command arrives. This prevents fragmentary JSON from being parsed early.
 }
 
 #if defined(ESP32)

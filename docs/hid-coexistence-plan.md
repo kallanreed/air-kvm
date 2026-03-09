@@ -157,6 +157,19 @@ Notes:
 1. UART lock contention occurs if multiple `mcp-tool-call` processes run in parallel. Keep HID/browser validations sequential on current topology.
 2. Remaining Sprint C work: long-duration mixed soak and reconnect/sleep-wake fault lanes.
 
+Date: March 8, 2026
+Checkpoint: Sprint C (short mixed-load soak, 5 cycles)
+
+Observed:
+1. `js.exec` succeeded in every cycle.
+2. `screenshot_tab` succeeded in every cycle.
+3. HID interleaved commands (`mouse.move_rel`, `key.tap`) succeeded in every cycle.
+4. `tabs.list` timed out in every cycle.
+
+Preliminary diagnosis:
+1. `tabs.list.request` reaches firmware and is forwarded (request + ACK observed), but typed `tabs.list` response does not return to MCP during these cycles.
+2. This is currently the primary Sprint C blocker for full bench-matrix pass.
+
 ## Agent Task List (Execution-Ready)
 
 ## Sprint A: Instrumentation Baseline (No Behavior Change)
