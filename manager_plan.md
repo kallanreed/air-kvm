@@ -50,4 +50,5 @@ Planned sequence:
 1. [x] Phase 0 instrumentation (firmware + extension connection/failure telemetry), no behavior change.
 2. [x] Add HID-enabled firmware build variant behind flag; keep default build HID-off.
 3. [ ] Run bench validation matrix (browser-only, HID-only, mixed load, reconnect/sleep-wake faults).
+   - Initial checkpoint complete: HID pairing + browser coexistence + open_tab/js_exec/screenshot + HID command interleave.
 4. [ ] Canary rollout with explicit go/no-go gates and rollback path.

@@ -18,6 +18,9 @@ constexpr const char* kTxCharUuid = "6E400103-B5A3-F393-E0A9-E50E24DCCB01";
 #ifndef AIRKVM_ENABLE_HID
 #define AIRKVM_ENABLE_HID 0
 #endif
+#ifndef AIRKVM_HID_SECURITY_MODE
+#define AIRKVM_HID_SECURITY_MODE 1
+#endif
 #define AIRKVM_FW_BUILT_AT __DATE__ " " __TIME__
 
 constexpr const char* kBootMsg =
@@ -65,7 +68,7 @@ void AirKvmApp::Setup() {
 #endif
 
   NimBLEDevice::init(kDeviceName);
-  if (AIRKVM_ENABLE_HID) {
+  if (AIRKVM_ENABLE_HID && AIRKVM_HID_SECURITY_MODE != 0) {
     // Make HID pairing/bonding explicit for host OSes that require secure HID workflows.
     NimBLEDevice::setSecurityAuth(true, false, true);
     NimBLEDevice::setSecurityIOCap(0x03);  // BLE_HS_IO_NO_INPUT_OUTPUT

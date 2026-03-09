@@ -35,11 +35,18 @@ cd firmware
 pio run -e esp32dev
 ```
 
-HID+UART coexistence variant (HID enabled):
+HID+UART coexistence variant (HID enabled, secure pairing mode):
 
 ```bash
 cd firmware
 pio run -e esp32dev_hid_uart
+```
+
+HID+UART compatibility variant (HID enabled, compatibility-first security mode):
+
+```bash
+cd firmware
+pio run -e esp32dev_hid_uart_compat
 ```
 
 Flash default HID-off variant:
@@ -54,6 +61,13 @@ Flash HID+UART variant:
 ```bash
 cd firmware
 pio run -e esp32dev_hid_uart -t upload
+```
+
+Flash HID+UART compatibility variant:
+
+```bash
+cd firmware
+pio run -e esp32dev_hid_uart_compat -t upload
 ```
 
 Rollback guidance:
@@ -110,6 +124,7 @@ Tool harness:
 
 Firmware build/runtime:
 - `AIRKVM_ENABLE_HID` compile-time switch (default `0` in current app config)
+- `AIRKVM_HID_SECURITY_MODE` compile-time switch (`1` secure pairing mode, `0` compatibility mode)
 
 ## BLE Manual Reference
 

@@ -136,6 +136,27 @@ Rollback:
 3. Failure events are actionable (diagnosable in one pass from logs).
 4. Rollback can be executed in minutes with no extension/MCP changes.
 
+## Execution Log
+
+Date: March 8, 2026
+Checkpoint: Sprint C (initial coexistence validation)
+
+Observed:
+1. HID pairing/connect on macOS succeeded after secure HID mode + modifier-key support (`Shift` prompt path).
+2. Browser BLE bridge still connected after HID pairing.
+3. Browser lane command success:
+- `airkvm_open_tab` succeeded for `https://example.com`.
+- `airkvm_exec_js_tab` succeeded (`"Example Domain"`).
+- `airkvm_screenshot_tab` succeeded (`image/jpeg`, binary transfer path).
+4. HID lane command success while browser path remained active:
+- `mouse.move_rel`
+- `mouse.click`
+- `key.tap` (`Enter`, `A`, `Shift`)
+
+Notes:
+1. UART lock contention occurs if multiple `mcp-tool-call` processes run in parallel. Keep HID/browser validations sequential on current topology.
+2. Remaining Sprint C work: long-duration mixed soak and reconnect/sleep-wake fault lanes.
+
 ## Agent Task List (Execution-Ready)
 
 ## Sprint A: Instrumentation Baseline (No Behavior Change)
