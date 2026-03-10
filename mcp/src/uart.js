@@ -154,6 +154,93 @@ export class UartTransport {
     return scheduled;
   }
 
+  async waitForFrame(responseCollector, timeoutMs = this.commandTimeoutMs) {
+    if (typeof responseCollector !== 'function') {
+      throw new Error('invalid_response_collector');
+    }
+    const run = async () => {
+      await this.open();
+      return new Promise((resolve, reject) => {
+        const frames = [];
+        let timer = null;
+        let waiterClosed = false;
+        let controlWriteQueue = Promise.resolve();
+
+        const queueCollectorCommands = (commands) => {
+          if (!Array.isArray(commands) || commands.length === 0) return;
+          for (const outbound of commands) {
+            this.log(`collector outbound=${JSON.stringify(outbound)}`);
+            controlWriteQueue = controlWriteQueue
+              .then(() => this.writeRawCommand(outbound))
+              .catch((err) => {
+                this.log(`collector tx error: ${err?.message || err}`);
+              });
+          }
+        };
+
+        const armTimer = (ms = timeoutMs) => {
+          if (timer) clearTimeout(timer);
+          timer = setTimeout(() => {
+            if (waiterClosed) return;
+            const err = new Error('device_timeout');
+            err.frames = frames;
+            err.recentFrames = this.recentFrames.slice(-50);
+            finish(reject, err);
+          }, ms);
+        };
+
+        const finish = (fn, value) => {
+          if (waiterClosed) return;
+          waiterClosed = true;
+          if (timer) clearTimeout(timer);
+          this.currentWaiter = null;
+          fn(value);
+        };
+
+        armTimer(timeoutMs);
+        this.currentWaiter = {
+          reject,
+          onFrame: (frame) => {
+            frames.push(frame);
+            const msg = frame.kind === 'ctrl' || frame.kind === 'legacy_ctrl' ? frame.msg : null;
+            const shouldCallCollector = Boolean(
+              msg ||
+              frame.kind === 'bin' ||
+              frame.kind === 'bin_error'
+            );
+            if (!shouldCallCollector) return;
+            armTimer(timeoutMs);
+            const collected = responseCollector(msg, frame, frames);
+            if (collected?.done) {
+              if (Array.isArray(collected.outbound) && collected.outbound.length > 0) {
+                queueCollectorCommands(collected.outbound);
+              }
+              finish(resolve, {
+                ok: typeof collected.ok === 'boolean' ? collected.ok : true,
+                msg: collected.msg ?? msg,
+                frames,
+                data: collected.data
+              });
+              return;
+            }
+            if (Array.isArray(collected?.outbound) && collected.outbound.length > 0) {
+              queueCollectorCommands(collected.outbound);
+            }
+            if (Number.isInteger(collected?.extendTimeoutMs)) {
+              armTimer(collected.extendTimeoutMs);
+            } else if (collected) {
+              armTimer(timeoutMs);
+            }
+          }
+        };
+      });
+    };
+
+    const scheduled = this.sendQueue.then(run, run);
+    this.sendQueue = scheduled.catch(() => {});
+    return scheduled;
+  }
+
   async sendCommand(command, responseCollector = null) {
     const run = async () => {
       await this.open();

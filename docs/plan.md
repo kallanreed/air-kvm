@@ -84,3 +84,28 @@ Maintain a reliable remote-control and browser-automation stack where:
 5. Complete transfer-path reliability validation for non-image payloads.
 - Confirm long `dom.snapshot` transfer sessions complete consistently under live BLE conditions.
 - Add diagnostics for missing-sequence detection and retry behavior across image + DOM transfers.
+
+## TODO (March 10, 2026 handoff)
+
+1. Finish symmetric transfer reliability for MCP->UART->FW->BLE (JS script upload path).
+- Keep transfer controls identical both directions: `transfer.meta/chunk/done` with `transfer.ack/nack/resume/cancel/reset`.
+- Keep sender retry policy bounded and deterministic (windowed send + retry caps + timeout behavior).
+
+2. Fix firmware UART ingress corruption under sustained control-chunk traffic.
+- Current symptom: malformed/spliced `transfer.chunk` JSON arrives at bridge (`invalid_ctrl_json`) before extension parsing.
+- Add UART-ingress hardening so control lines cannot be merged/truncated under burst load.
+- Prefer framed/binary ingress for high-volume transfer chunks if line-based JSON cannot be made robust enough.
+
+3. Tighten backpressure defaults for JS upload transfer.
+- Start with conservative send window/ACK stride and validate no corruption over repeated >4KB uploads.
+- Re-tune upward only after live soak confirms stable ingress with zero malformed chunk lines.
+
+4. Add end-to-end tests for reverse transfer direction (host -> extension).
+- ACK progress behavior.
+- NACK-triggered chunk resend.
+- Resume from arbitrary sequence.
+- Cancel/reset cleanup for all active transfer maps and in-flight flags.
+
+5. Resolve `airkvm_send` generic timeout behavior for transfer control responses.
+- `transfer.reset.ok` currently reaches transport but may not satisfy `airkvm_send` completion semantics.
+- Add explicit correlation handling so reset/transfer control commands surface success without false timeout errors.

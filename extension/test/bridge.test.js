@@ -421,3 +421,63 @@ test('connectBle invokes onDisconnect callback on gatt disconnection', async () 
   disconnectHandler();
   assert.equal(disconnectCalls, 1);
 });
+
+test('connectBle recovers parser after malformed control line and delivers next valid command', async () => {
+  __resetBleForTest();
+  let notifyHandler = null;
+  const commands = [];
+  const rx = {
+    writeValueWithoutResponse: async () => {}
+  };
+  const tx = {
+    addEventListener: (event, handler) => {
+      if (event === 'characteristicvaluechanged') {
+        notifyHandler = handler;
+      }
+    },
+    startNotifications: async () => {}
+  };
+  const service = {
+    getCharacteristic: async (uuid) => (String(uuid).endsWith('03-b5a3-f393-e0a9-e50e24dccb01') ? tx : rx)
+  };
+  const server = {
+    connected: true,
+    getPrimaryService: async () => service
+  };
+  const device = {
+    gatt: { connected: true, connect: async () => server },
+    addEventListener: () => {}
+  };
+  const navigatorLike = {
+    bluetooth: {
+      requestDevice: async () => device
+    }
+  };
+
+  const connected = await connectBle({
+    navigatorLike,
+    onCommand: (msg) => {
+      commands.push(msg);
+    }
+  });
+  assert.equal(connected, true);
+  assert.equal(typeof notifyHandler, 'function');
+
+  const encoder = new TextEncoder();
+  const malformed = encoder.encode('{"type":"transfer.meta","request_id":"bad"\n');
+  notifyHandler({
+    target: {
+      value: new DataView(malformed.buffer, malformed.byteOffset, malformed.byteLength)
+    }
+  });
+  const valid = encoder.encode('{"type":"transfer.reset","request_id":"reset-1"}\n');
+  notifyHandler({
+    target: {
+      value: new DataView(valid.buffer, valid.byteOffset, valid.byteLength)
+    }
+  });
+
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0]?.type, 'transfer.reset');
+  assert.equal(commands[0]?.request_id, 'reset-1');
+});

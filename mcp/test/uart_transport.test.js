@@ -191,3 +191,27 @@ test('sendCommand forwards collector outbound commands and completes', async () 
   assert.equal(writes.some((line) => line.includes('"type":"transfer.ack"')), true);
   transport.close();
 });
+
+test('waitForFrame resolves on matching collector frame', async () => {
+  const transport = makeTestTransport(200);
+  const pending = transport.waitForFrame((msg) => {
+    if (msg?.type === 'transfer.ack' && msg?.transfer_id === 'tx-wait-1') {
+      return { done: true, ok: true, data: { highest: msg.highest_contiguous_seq } };
+    }
+    return null;
+  }, 200);
+
+  setTimeout(() => {
+    transport.onData(encodeControlFrame({
+      type: 'transfer.ack',
+      request_id: 'r1',
+      transfer_id: 'tx-wait-1',
+      highest_contiguous_seq: 7
+    }));
+  }, 10);
+
+  const result = await pending;
+  assert.equal(result.ok, true);
+  assert.equal(result.data.highest, 7);
+  transport.close();
+});

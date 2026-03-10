@@ -3,6 +3,7 @@ const UART_RX_CHAR_UUID = '6e400102-b5a3-f393-e0a9-e50e24dccb01';
 const UART_TX_CHAR_UUID = '6e400103-b5a3-f393-e0a9-e50e24dccb01';
 const kBleWriteChunkBytes = 160;
 const kDebug = true;
+const kMaxControlBufferChars = 32 * 1024;
 let verboseDebugEnabled = false;
 let debugLogger = null;
 
@@ -644,6 +645,35 @@ function onBleBytes(text, onCommand) {
   if (!text || typeof text !== 'string') return;
   debugVerbose('rx bytes', { bytes: text.length, preview: text.slice(0, 160) });
   bleLineBuffer += text;
+  const newlineIndex = bleLineBuffer.lastIndexOf('\n');
+  if (newlineIndex >= 0) {
+    const complete = bleLineBuffer.slice(0, newlineIndex + 1);
+    bleLineBuffer = bleLineBuffer.slice(newlineIndex + 1);
+    const lines = complete.split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const msg = JSON.parse(trimmed);
+        debugLog('rx json', msg?.type || 'unknown');
+        if (typeof onCommand === 'function') onCommand(msg);
+        continue;
+      } catch {
+        // Fall through and salvage any valid JSON objects in the line.
+      }
+      const { messages } = extractJsonObjects(trimmed);
+      for (const serialized of messages) {
+        try {
+          const msg = JSON.parse(serialized);
+          debugLog('rx json', msg?.type || 'unknown');
+          if (typeof onCommand === 'function') onCommand(msg);
+        } catch {
+          // Ignore malformed objects.
+        }
+      }
+    }
+  }
+
   const { messages, rest } = extractJsonObjects(bleLineBuffer);
   bleLineBuffer = rest;
   for (const serialized of messages) {
@@ -654,6 +684,11 @@ function onBleBytes(text, onCommand) {
     } catch {
       // Ignore malformed objects.
     }
+  }
+
+  if (bleLineBuffer.length > kMaxControlBufferChars) {
+    // Drop pathological partial data to avoid wedging parser forever.
+    bleLineBuffer = '';
   }
 }
 

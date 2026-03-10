@@ -6,6 +6,7 @@ const kDebugStorageKey = 'airkvmVerboseBridgeLog';
 const kScreenshotCaptureTimeoutMs = 25000;
 const kScreenshotStageTimeoutMs = 10000;
 const kTransferAckWindow = 8;
+const kInboundTransferAckStride = 8;
 const kTransferTtlMs = 2 * 60 * 1000;
 const kJsExecScriptMinChars = 1;
 const kJsExecScriptMaxChars = 12000;
@@ -500,6 +501,14 @@ function pruneInboundScriptTransfers(nowTs = Date.now()) {
       inboundScriptTransfers.delete(transferId);
     }
   }
+}
+
+function highestContiguousScriptSeq(session) {
+  let seq = -1;
+  while (session.chunksBySeq.has(seq + 1)) {
+    seq += 1;
+  }
+  return seq;
 }
 
 function decodeBase64ToBytes(text) {
@@ -1252,6 +1261,7 @@ async function handleTransferCancel(command) {
 async function handleTransferReset(command) {
   screenshotTransfers.clear();
   inboundScriptTransfers.clear();
+  screenshotInFlight = false;
   void writeSwBreadcrumb('transfer_reset', {
     request_id: command?.request_id || null
   });
@@ -1505,6 +1515,7 @@ const kBleCommandHandlers = {
         totalChunks,
         totalBytes: Number.isInteger(cmd?.total_bytes) ? cmd.total_bytes : null,
         chunksBySeq: new Map(),
+        highestAckSeq: -1,
         done: false,
         updatedAt: Date.now()
       });
@@ -1530,7 +1541,37 @@ const kBleCommandHandlers = {
       if (seq >= session.totalChunks) {
         throw new Error('invalid_seq');
       }
+      const beforeHighestSeq = highestContiguousScriptSeq(session);
       session.chunksBySeq.set(seq, decodeBase64ToBytes(dataB64));
+      if (seq > beforeHighestSeq + 1) {
+        await postEventViaBridge({
+          type: 'transfer.nack',
+          request_id: session.requestId,
+          transfer_id: session.transferId,
+          source: 'js.exec.script',
+          seq: beforeHighestSeq + 1,
+          ts: Date.now()
+        });
+      }
+      const highestSeq = highestContiguousScriptSeq(session);
+      const shouldAck = (
+        highestSeq > session.highestAckSeq
+        && (
+          (highestSeq - session.highestAckSeq) >= kInboundTransferAckStride
+          || highestSeq + 1 >= session.totalChunks
+        )
+      );
+      if (shouldAck) {
+        session.highestAckSeq = highestSeq;
+        await postEventViaBridge({
+          type: 'transfer.ack',
+          request_id: session.requestId,
+          transfer_id: session.transferId,
+          source: 'js.exec.script',
+          highest_contiguous_seq: highestSeq,
+          ts: Date.now()
+        });
+      }
       session.updatedAt = Date.now();
     },
     async (cmd, detail) => sendTransferError(cmd, 'transfer_chunk_failed', detail)
@@ -1548,6 +1589,19 @@ const kBleCommandHandlers = {
       const session = inboundScriptTransfers.get(transferId);
       if (!session) {
         throw new Error('no_such_transfer');
+      }
+      const highestSeq = highestContiguousScriptSeq(session);
+      if (highestSeq + 1 < session.totalChunks) {
+        await postEventViaBridge({
+          type: 'transfer.nack',
+          request_id: session.requestId,
+          transfer_id: session.transferId,
+          source: 'js.exec.script',
+          seq: highestSeq + 1,
+          ts: Date.now()
+        });
+        session.updatedAt = Date.now();
+        return;
       }
       session.done = true;
       session.updatedAt = Date.now();
