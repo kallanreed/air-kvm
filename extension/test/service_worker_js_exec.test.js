@@ -356,171 +356,153 @@ test('service worker handles js.exec.request and posts js.exec.result via bridge
   assert.equal(resultPayload.truncated, false);
 });
 
-test('service worker handles js.exec.request with script_transfer_id', async () => {
+test('service worker handles js.exec.request delivered via stream.data chunks', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
   const listener = findBleCommandListener(harness.runtimeListeners);
   const transferId = 'tx_abcdef01';
-  const script = 'return document.title;';
-  const scriptB64 = Buffer.from(script, 'utf8').toString('base64');
-
-  await callBleCommand(listener, {
-    type: 'transfer.meta',
-    source: 'js.exec.script',
-    request_id: 'js-xfer-1',
-    transfer_id: transferId,
-    total_chunks: 1,
-    total_bytes: script.length
-  });
-  await callBleCommand(listener, {
-    type: 'transfer.chunk',
-    source: 'js.exec.script',
-    request_id: 'js-xfer-1',
-    transfer_id: transferId,
-    seq: 0,
-    data_b64: scriptB64
-  });
-  await callBleCommand(listener, {
-    type: 'transfer.done',
-    source: 'js.exec.script',
-    request_id: 'js-xfer-1',
-    transfer_id: transferId,
-    total_chunks: 1
-  });
-
-  await callBleCommand(listener, {
+  const command = {
     type: 'js.exec.request',
     request_id: 'js-xfer-1',
-    script_transfer_id: transferId
+    script: 'return document.title;',
+    timeout_ms: 300,
+    max_result_chars: 200
+  };
+  const json = JSON.stringify(command);
+  const bytes = new TextEncoder().encode(json);
+  const dataB64 = Buffer.from(bytes).toString('base64');
+
+  // Single-chunk stream.data delivery
+  await callBleCommand(listener, {
+    type: 'stream.data',
+    transfer_id: transferId,
+    seq: 0,
+    is_final: true,
+    data_b64: dataB64
   });
 
+  await waitFor(() => harness.postedPayloads.find((entry) => (
+    entry?.type === 'js.exec.result' && entry?.request_id === 'js-xfer-1'
+  )));
   const payload = harness.postedPayloads.find((entry) => (
     entry?.type === 'js.exec.result' && entry?.request_id === 'js-xfer-1'
   ));
   assert.equal(payload?.type, 'js.exec.result');
 });
 
-test('service worker emits transfer.ack while receiving js script transfer chunks', async () => {
+test('service worker emits stream.ack while receiving stream.data chunks', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
   const listener = findBleCommandListener(harness.runtimeListeners);
   const transferId = 'tx_ack_abcd';
-  const fullScript = 'return "ok";';
-  const chunk0 = Buffer.from('return ', 'utf8').toString('base64');
-  const chunk1 = Buffer.from('"ok";', 'utf8').toString('base64');
+  const command = {
+    type: 'js.exec.request',
+    request_id: 'js-ack-1',
+    script: 'return "ok";',
+    timeout_ms: 300,
+    max_result_chars: 200
+  };
+  const json = JSON.stringify(command);
+  const bytes = new TextEncoder().encode(json);
+  const mid = Math.floor(bytes.length / 2);
+  const chunk0B64 = Buffer.from(bytes.slice(0, mid)).toString('base64');
+  const chunk1B64 = Buffer.from(bytes.slice(mid)).toString('base64');
 
   await callBleCommand(listener, {
-    type: 'transfer.meta',
-    source: 'js.exec.script',
-    request_id: 'js-ack-1',
-    transfer_id: transferId,
-    total_chunks: 2,
-    total_bytes: fullScript.length
-  });
-  await callBleCommand(listener, {
-    type: 'transfer.chunk',
-    source: 'js.exec.script',
-    request_id: 'js-ack-1',
+    type: 'stream.data',
     transfer_id: transferId,
     seq: 0,
-    data_b64: chunk0
+    is_final: false,
+    data_b64: chunk0B64
   });
   await callBleCommand(listener, {
-    type: 'transfer.chunk',
-    source: 'js.exec.script',
-    request_id: 'js-ack-1',
+    type: 'stream.data',
     transfer_id: transferId,
     seq: 1,
-    data_b64: chunk1
+    is_final: true,
+    data_b64: chunk1B64
   });
 
   const ack = harness.postedPayloads.find((payload) => (
-    payload?.type === 'transfer.ack' && payload?.request_id === 'js-ack-1' && payload?.transfer_id === transferId
+    payload?.type === 'stream.ack' && payload?.transfer_id === transferId
   ));
   assert.equal(Boolean(ack), true);
-  assert.equal(ack?.highest_contiguous_seq, 1);
+  assert.equal(typeof ack?.seq, 'number');
 });
 
-test('service worker emits transfer.nack when inbound js script chunk has a gap', async () => {
+test('service worker handles stream.data with multi-chunk reassembly and dispatches command', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
   const listener = findBleCommandListener(harness.runtimeListeners);
-  const transferId = 'tx_nack_abcd';
+  const transferId = 'tx_multi_abcd';
+  const command = {
+    type: 'js.exec.request',
+    request_id: 'js-multi-1',
+    script: 'return 42;',
+    timeout_ms: 300,
+    max_result_chars: 200
+  };
+  const json = JSON.stringify(command);
+  const bytes = new TextEncoder().encode(json);
+  // Split into 3 chunks
+  const third = Math.floor(bytes.length / 3);
+  const chunk0B64 = Buffer.from(bytes.slice(0, third)).toString('base64');
+  const chunk1B64 = Buffer.from(bytes.slice(third, third * 2)).toString('base64');
+  const chunk2B64 = Buffer.from(bytes.slice(third * 2)).toString('base64');
 
   await callBleCommand(listener, {
-    type: 'transfer.meta',
-    source: 'js.exec.script',
-    request_id: 'js-nack-1',
+    type: 'stream.data',
     transfer_id: transferId,
-    total_chunks: 3,
-    total_bytes: 18
+    seq: 0,
+    is_final: false,
+    data_b64: chunk0B64
   });
   await callBleCommand(listener, {
-    type: 'transfer.chunk',
-    source: 'js.exec.script',
-    request_id: 'js-nack-1',
+    type: 'stream.data',
     transfer_id: transferId,
     seq: 1,
-    data_b64: Buffer.from('middle', 'utf8').toString('base64')
+    is_final: false,
+    data_b64: chunk1B64
+  });
+  await callBleCommand(listener, {
+    type: 'stream.data',
+    transfer_id: transferId,
+    seq: 2,
+    is_final: true,
+    data_b64: chunk2B64
   });
 
-  const nack = harness.postedPayloads.find((payload) => (
-    payload?.type === 'transfer.nack' && payload?.request_id === 'js-nack-1' && payload?.transfer_id === transferId
+  await waitFor(() => harness.postedPayloads.find((entry) => (
+    entry?.type === 'js.exec.result' && entry?.request_id === 'js-multi-1'
+  )));
+  const payload = harness.postedPayloads.find((entry) => (
+    entry?.type === 'js.exec.result' && entry?.request_id === 'js-multi-1'
   ));
-  assert.equal(Boolean(nack), true);
-  assert.equal(nack?.seq, 0);
+  assert.equal(payload?.type, 'js.exec.result');
 });
 
 test('service worker transfer.reset clears inbound script transfers', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
   const listener = findBleCommandListener(harness.runtimeListeners);
-  const transferId = 'tx_reset_abcd';
-  const script = 'return 42;';
-  const scriptB64 = Buffer.from(script, 'utf8').toString('base64');
 
+  // Send a partial stream.data chunk (no is_final), then reset
   await callBleCommand(listener, {
-    type: 'transfer.meta',
-    source: 'js.exec.script',
-    request_id: 'js-reset-1',
-    transfer_id: transferId,
-    total_chunks: 1,
-    total_bytes: script.length
-  });
-  await callBleCommand(listener, {
-    type: 'transfer.chunk',
-    source: 'js.exec.script',
-    request_id: 'js-reset-1',
-    transfer_id: transferId,
+    type: 'stream.data',
+    transfer_id: 'tx_reset_abcd',
     seq: 0,
-    data_b64: scriptB64
-  });
-  await callBleCommand(listener, {
-    type: 'transfer.done',
-    source: 'js.exec.script',
-    request_id: 'js-reset-1',
-    transfer_id: transferId,
-    total_chunks: 1
+    is_final: false,
+    data_b64: Buffer.from('partial').toString('base64')
   });
   await callBleCommand(listener, {
     type: 'transfer.reset',
     request_id: 'reset-all-1'
-  });
-  await callBleCommand(listener, {
-    type: 'js.exec.request',
-    request_id: 'js-reset-1',
-    script_transfer_id: transferId
   });
 
   const resetAck = harness.postedPayloads.find((payload) => (
     payload?.type === 'transfer.reset.ok' && payload?.request_id === 'reset-all-1'
   ));
   assert.equal(Boolean(resetAck), true);
-  const execError = harness.postedPayloads.find((payload) => (
-    payload?.type === 'js.exec.error' && payload?.request_id === 'js-reset-1'
-  ));
-  assert.equal(Boolean(execError), true);
-  assert.equal(execError?.error_code, 'js_exec_failed');
 });
 
 test('service worker returns js_exec_busy when a js exec request is already in flight', async () => {

@@ -1,6 +1,6 @@
 import { SerialPort } from 'serialport';
 import { tryExtractFrameFromBuffer } from './binary_frame.js';
-import { StreamReceiver } from './stream.js';
+import { StreamSender, StreamReceiver } from './stream.js';
 
 const kMagic0 = 0x41;
 const kMagic1 = 0x4b;
@@ -161,80 +161,7 @@ export class UartTransport {
     }
     const run = async () => {
       await this.open();
-      return new Promise((resolve, reject) => {
-        const frames = [];
-        let timer = null;
-        let waiterClosed = false;
-        let controlWriteQueue = Promise.resolve();
-
-        const queueCollectorCommands = (commands) => {
-          if (!Array.isArray(commands) || commands.length === 0) return;
-          for (const outbound of commands) {
-            this.log(`collector outbound=${JSON.stringify(outbound)}`);
-            controlWriteQueue = controlWriteQueue
-              .then(() => this.writeRawCommand(outbound))
-              .catch((err) => {
-                this.log(`collector tx error: ${err?.message || err}`);
-              });
-          }
-        };
-
-        const armTimer = (ms = timeoutMs) => {
-          if (timer) clearTimeout(timer);
-          timer = setTimeout(() => {
-            if (waiterClosed) return;
-            const err = new Error('device_timeout');
-            err.frames = frames;
-            err.recentFrames = this.recentFrames.slice(-50);
-            finish(reject, err);
-          }, ms);
-        };
-
-        const finish = (fn, value) => {
-          if (waiterClosed) return;
-          waiterClosed = true;
-          if (timer) clearTimeout(timer);
-          this.currentWaiter = null;
-          fn(value);
-        };
-
-        armTimer(timeoutMs);
-        this.currentWaiter = {
-          reject,
-          onFrame: (frame) => {
-            frames.push(frame);
-            const msg = frame.kind === 'ctrl' || frame.kind === 'legacy_ctrl' ? frame.msg : null;
-            const shouldCallCollector = Boolean(
-              msg ||
-              frame.kind === 'bin' ||
-              frame.kind === 'bin_error'
-            );
-            if (!shouldCallCollector) return;
-            armTimer(timeoutMs);
-            const collected = responseCollector(msg, frame, frames);
-            if (collected?.done) {
-              if (Array.isArray(collected.outbound) && collected.outbound.length > 0) {
-                queueCollectorCommands(collected.outbound);
-              }
-              finish(resolve, {
-                ok: typeof collected.ok === 'boolean' ? collected.ok : true,
-                msg: collected.msg ?? msg,
-                frames,
-                data: collected.data
-              });
-              return;
-            }
-            if (Array.isArray(collected?.outbound) && collected.outbound.length > 0) {
-              queueCollectorCommands(collected.outbound);
-            }
-            if (Number.isInteger(collected?.extendTimeoutMs)) {
-              armTimer(collected.extendTimeoutMs);
-            } else if (collected) {
-              armTimer(timeoutMs);
-            }
-          }
-        };
-      });
+      return this._collectFrames({ collector: responseCollector, timeoutMs });
     };
 
     const scheduled = this.sendQueue.then(run, run);
@@ -247,121 +174,139 @@ export class UartTransport {
       await this.open();
       await this.writeRawCommand(command);
 
-      return new Promise((resolve, reject) => {
-        const frames = [];
-        let timer = null;
-        let waiterClosed = false;
-        let controlWriteQueue = Promise.resolve();
-
-        const queueCollectorCommands = (commands) => {
-          if (!Array.isArray(commands) || commands.length === 0) return;
-          for (const outbound of commands) {
-            this.log(`collector outbound=${JSON.stringify(outbound)}`);
-            controlWriteQueue = controlWriteQueue
-              .then(() => this.writeRawCommand(outbound))
-              .catch((err) => {
-                this.log(`collector tx error: ${err?.message || err}`);
-              });
-          }
-        };
-
-        const armTimer = (ms = this.commandTimeoutMs) => {
-          if (timer) clearTimeout(timer);
-          timer = setTimeout(() => {
-            if (waiterClosed) return;
-            if (typeof responseCollector?.onTimeout === 'function') {
-              const timed = responseCollector.onTimeout(frames);
-              if (timed) {
-                if (Array.isArray(timed.outbound) && timed.outbound.length > 0) {
-                  queueCollectorCommands(timed.outbound);
-                }
-                if (timed.done) {
-                  if (typeof timed.ok === 'boolean' && timed.ok === false) {
-                    finish(resolve, {
-                      ok: false,
-                      msg: timed.msg ?? null,
-                      frames,
-                      data: timed.data
-                    });
-                    return;
-                  }
-                  finish(resolve, {
-                    ok: true,
-                    msg: timed.msg ?? null,
-                    frames,
-                    data: timed.data
-                  });
-                  return;
-                }
-                armTimer(Number.isInteger(timed.extendTimeoutMs) ? timed.extendTimeoutMs : this.commandTimeoutMs);
-                return;
-              }
-            }
-            this.log(`timeout command=${JSON.stringify(command)} frames=${JSON.stringify(frames)}`);
-            const err = new Error('device_timeout');
-            err.frames = frames;
-            err.recentFrames = this.recentFrames.slice(-50);
-            finish(reject, err);
-          }, ms);
-        };
-
-        const finish = (fn, value) => {
-          if (waiterClosed) return;
-          waiterClosed = true;
-          if (timer) clearTimeout(timer);
-          this.currentWaiter = null;
-          fn(value);
-        };
-        armTimer(this.commandTimeoutMs);
-
-        this.currentWaiter = {
-          reject,
-          onFrame: (frame) => {
-            frames.push(frame);
-            const msg = frame.kind === 'ctrl' || frame.kind === 'legacy_ctrl' ? frame.msg : null;
-            const shouldCallCollector = Boolean(
-              msg ||
-              frame.kind === 'bin' ||
-              frame.kind === 'bin_error'
-            );
-            if (responseCollector && shouldCallCollector) {
-              // Any control/bin frame is progress for long-running streamed responses.
-              armTimer(this.commandTimeoutMs);
-              const collected = responseCollector(msg, frame, frames);
-              if (collected?.done) {
-                if (Array.isArray(collected.outbound) && collected.outbound.length > 0) {
-                  queueCollectorCommands(collected.outbound);
-                }
-                finish(resolve, {
-                  ok: typeof collected.ok === 'boolean' ? collected.ok : true,
-                  msg: collected.msg ?? msg,
-                  frames,
-                  data: collected.data
-                });
-                return;
-              }
-              if (Array.isArray(collected?.outbound) && collected.outbound.length > 0) {
-                queueCollectorCommands(collected.outbound);
-              }
-              if (Number.isInteger(collected?.extendTimeoutMs)) {
-                armTimer(collected.extendTimeoutMs);
-              } else if (collected) {
-                // A collector match indicates progress; keep wait alive.
-                armTimer(this.commandTimeoutMs);
-              }
-            }
-            if (!responseCollector && this.shouldResolveForCommand(command, msg)) {
+      return this._collectFrames({
+        collector: responseCollector,
+        timeoutMs: this.commandTimeoutMs,
+        onTimeout: typeof responseCollector?.onTimeout === 'function'
+          ? responseCollector.onTimeout
+          : null,
+        noCollectorMatch: !responseCollector
+          ? (msg) => {
+            if (this.shouldResolveForCommand(command, msg)) {
               this.log(`resolved command=${JSON.stringify(command)} msg=${JSON.stringify(msg)}`);
-              finish(resolve, { ok: msg.ok, msg, frames });
+              return { ok: msg.ok, msg };
             }
+            return null;
           }
-        };
+          : null,
+        logContext: command,
       });
     };
 
     const scheduled = this.sendQueue.then(run, run);
     this.sendQueue = scheduled.catch(() => {});
     return scheduled;
+  }
+
+  // Shared frame-collection loop used by sendCommand, waitForFrame, and
+  // streamSendCommand.  Sets up currentWaiter, timer, and collector routing.
+  _collectFrames({ collector, timeoutMs, onTimeout = null, noCollectorMatch = null, logContext = null }) {
+    return new Promise((resolve, reject) => {
+      const frames = [];
+      let timer = null;
+      let waiterClosed = false;
+      let controlWriteQueue = Promise.resolve();
+
+      const queueCollectorCommands = (commands) => {
+        if (!Array.isArray(commands) || commands.length === 0) return;
+        for (const outbound of commands) {
+          this.log(`collector outbound=${JSON.stringify(outbound)}`);
+          controlWriteQueue = controlWriteQueue
+            .then(() => this.writeRawCommand(outbound))
+            .catch((err) => {
+              this.log(`collector tx error: ${err?.message || err}`);
+            });
+        }
+      };
+
+      const armTimer = (ms = timeoutMs) => {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          if (waiterClosed) return;
+          if (onTimeout) {
+            const timed = onTimeout(frames);
+            if (timed) {
+              if (Array.isArray(timed.outbound) && timed.outbound.length > 0) {
+                queueCollectorCommands(timed.outbound);
+              }
+              if (timed.done) {
+                finish(resolve, {
+                  ok: typeof timed.ok === 'boolean' ? timed.ok : true,
+                  msg: timed.msg ?? null,
+                  frames,
+                  data: timed.data,
+                });
+                return;
+              }
+              armTimer(Number.isInteger(timed.extendTimeoutMs) ? timed.extendTimeoutMs : timeoutMs);
+              return;
+            }
+          }
+          if (logContext) {
+            this.log(`timeout command=${JSON.stringify(logContext)} frames=${JSON.stringify(frames)}`);
+          }
+          const err = new Error('device_timeout');
+          err.frames = frames;
+          err.recentFrames = this.recentFrames.slice(-50);
+          finish(reject, err);
+        }, ms);
+      };
+
+      const finish = (fn, value) => {
+        if (waiterClosed) return;
+        waiterClosed = true;
+        if (timer) clearTimeout(timer);
+        this.currentWaiter = null;
+        fn(value);
+      };
+
+      armTimer(timeoutMs);
+
+      this.currentWaiter = {
+        reject,
+        onFrame: (frame) => {
+          frames.push(frame);
+          const msg = frame.kind === 'ctrl' || frame.kind === 'legacy_ctrl' ? frame.msg : null;
+          const shouldCallCollector = Boolean(
+            msg ||
+            frame.kind === 'bin' ||
+            frame.kind === 'bin_error'
+          );
+
+          if (collector && shouldCallCollector) {
+            armTimer(timeoutMs);
+            const collected = collector(msg, frame, frames);
+            if (collected?.done) {
+              if (Array.isArray(collected.outbound) && collected.outbound.length > 0) {
+                queueCollectorCommands(collected.outbound);
+              }
+              finish(resolve, {
+                ok: typeof collected.ok === 'boolean' ? collected.ok : true,
+                msg: collected.msg ?? msg,
+                frames,
+                data: collected.data,
+              });
+              return;
+            }
+            if (Array.isArray(collected?.outbound) && collected.outbound.length > 0) {
+              queueCollectorCommands(collected.outbound);
+            }
+            if (Number.isInteger(collected?.extendTimeoutMs)) {
+              armTimer(collected.extendTimeoutMs);
+            } else if (collected) {
+              armTimer(timeoutMs);
+            }
+          }
+
+          if (noCollectorMatch && msg) {
+            const match = noCollectorMatch(msg);
+            if (match) {
+              finish(resolve, { ok: match.ok, msg: match.msg, frames });
+            }
+          }
+        },
+      };
+    });
   }
 
   // Stream-based request: sends a command and returns the complete response
@@ -427,6 +372,63 @@ export class UartTransport {
           },
         };
       });
+    };
+
+    const scheduled = this.sendQueue.then(run, run);
+    this.sendQueue = scheduled.catch(() => {});
+    return scheduled;
+  }
+
+  // Stream-based send + response: sends a large command via stream layer
+  // (JSON-based chunking), then waits for a response using the collector.
+  // Used for MCP→Extension direction where UART is text-only.
+  async streamSendCommand(command, responseCollector, { timeoutMs = this.commandTimeoutMs } = {}) {
+    const run = async () => {
+      await this.open();
+
+      const sender = new StreamSender({
+        writeJsonFn: async (obj) => { await this.writeRawCommand(obj); },
+      });
+
+      // Phase 1: stream-send the command, routing acks from extension.
+      await new Promise((resolve, reject) => {
+        let finished = false;
+        const timer = setTimeout(() => {
+          if (finished) return;
+          finished = true;
+          this.currentWaiter = null;
+          sender.reset();
+          reject(new Error('stream_send_timeout'));
+        }, timeoutMs);
+
+        this.currentWaiter = {
+          reject,
+          onFrame: (frame) => {
+            if (finished) return;
+            const msg = frame.kind === 'ctrl' || frame.kind === 'legacy_ctrl' ? frame.msg : null;
+            if (msg?.type === 'stream.ack' || msg?.type === 'stream.nack') {
+              sender.onAck(msg);
+            }
+          },
+        };
+
+        sender.send(command).then(() => {
+          if (finished) return;
+          finished = true;
+          clearTimeout(timer);
+          this.currentWaiter = null;
+          resolve();
+        }).catch((err) => {
+          if (finished) return;
+          finished = true;
+          clearTimeout(timer);
+          this.currentWaiter = null;
+          reject(err);
+        });
+      });
+
+      // Phase 2: wait for the response using the shared collector loop.
+      return this._collectFrames({ collector: responseCollector, timeoutMs });
     };
 
     const scheduled = this.sendQueue.then(run, run);

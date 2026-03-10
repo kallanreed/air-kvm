@@ -220,9 +220,24 @@ export class StreamReceiver {
     if (msg?.type === 'stream.ack' || msg?.type === 'stream.nack' || msg?.type === 'stream.reset') {
       return;
     }
+    if (msg?.type === 'stream.data') {
+      this._handleStreamData(msg);
+      return;
+    }
     if (this._messageHandler) {
       try { this._messageHandler(msg); } catch { /* app error */ }
     }
+  }
+
+  _handleStreamData(msg) {
+    const transferId = typeof msg.transfer_id === 'string' ? msg.transfer_id : null;
+    if (!transferId) return;
+    const seq = typeof msg.seq === 'number' ? msg.seq : 0;
+    const final = msg.is_final === true;
+    const b64 = typeof msg.data_b64 === 'string' ? msg.data_b64 : '';
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const rawSeq = encodeSeq(seq, final);
+    this.onChunkFrame({ transfer_id: transferId, raw_seq: rawSeq, payload: bytes });
   }
 
   onChunkFrame(frame) {

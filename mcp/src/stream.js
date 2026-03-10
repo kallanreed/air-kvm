@@ -8,9 +8,10 @@
 //   - Sending: serialize → chunk → send one at a time → wait for ack → next
 //   - Receiving: accept chunks → reassemble → deliver complete object
 //
-// Uses writeJsonFn for inline JSON and writeBinaryFn for binary chunk frames.
-// This matches the firmware's dual path: JSON goes through text UART,
-// binary goes through the AK framed path.
+// Supports two chunking modes:
+//   - Binary: uses writeBinaryFn for AK framed chunks (extension→MCP via BLE)
+//   - JSON:   uses writeJsonFn with stream.data messages (MCP→extension via UART)
+//             Falls back to JSON mode when writeBinaryFn is not provided.
 
 import {
   formatTransferId,
@@ -18,11 +19,12 @@ import {
 } from './binary_frame.js';
 
 const kDefaultChunkSize = 160;
+const kJsonChunkSize = 384;
 const kAckTimeoutMs = 3000;
 const kMaxRetries = 3;
 const kSeqFinalBit = 0x80000000;
 
-export { kDefaultChunkSize, kAckTimeoutMs, kMaxRetries, kSeqFinalBit };
+export { kDefaultChunkSize, kJsonChunkSize, kAckTimeoutMs, kMaxRetries, kSeqFinalBit };
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -68,12 +70,12 @@ export { seqNumber, isFinal, encodeSeq, chunkPayload };
 // ---------------------------------------------------------------------------
 
 export class StreamSender {
-  constructor({ writeJsonFn, writeBinaryFn, chunkSize = kDefaultChunkSize, ackTimeoutMs = kAckTimeoutMs, maxRetries = kMaxRetries } = {}) {
+  constructor({ writeJsonFn, writeBinaryFn = null, chunkSize, ackTimeoutMs = kAckTimeoutMs, maxRetries = kMaxRetries } = {}) {
     if (typeof writeJsonFn !== 'function') throw new Error('writeJsonFn required');
-    if (typeof writeBinaryFn !== 'function') throw new Error('writeBinaryFn required');
     this._writeJsonFn = writeJsonFn;       // async (obj) => void — sends JSON text
-    this._writeBinaryFn = writeBinaryFn;   // async (Buffer) => void — sends binary frame
-    this._chunkSize = chunkSize;
+    this._writeBinaryFn = writeBinaryFn;   // async (Buffer) => void — sends binary frame (optional)
+    this._jsonOnly = typeof writeBinaryFn !== 'function';
+    this._chunkSize = chunkSize ?? (this._jsonOnly ? kJsonChunkSize : kDefaultChunkSize);
     this._ackTimeoutMs = ackTimeoutMs;
     this._maxRetries = maxRetries;
     this._queue = Promise.resolve();
@@ -137,16 +139,25 @@ export class StreamSender {
   }
 
   async _sendChunkWithRetry(tid, chunk) {
-    const frame = encodeTransferChunkFrame({
-      transferId: tid.numeric,
-      seq: encodeSeq(chunk.seq, chunk.final),
-      payload: chunk.payload,
-    });
-
     let lastError = null;
     for (let attempt = 0; attempt <= this._maxRetries; attempt += 1) {
       try {
-        await this._writeBinaryFn(frame);
+        if (this._jsonOnly) {
+          await this._writeJsonFn({
+            type: 'stream.data',
+            transfer_id: tid.string,
+            seq: chunk.seq,
+            is_final: chunk.final,
+            data_b64: chunk.payload.toString('base64'),
+          });
+        } else {
+          const frame = encodeTransferChunkFrame({
+            transferId: tid.numeric,
+            seq: encodeSeq(chunk.seq, chunk.final),
+            payload: chunk.payload,
+          });
+          await this._writeBinaryFn(frame);
+        }
         await this._waitForAck(tid.string, chunk.seq);
         return;
       } catch (err) {
@@ -212,9 +223,24 @@ export class StreamReceiver {
     if (msg?.type === 'stream.ack' || msg?.type === 'stream.nack' || msg?.type === 'stream.reset') {
       return;
     }
+    if (msg?.type === 'stream.data') {
+      this._handleStreamData(msg);
+      return;
+    }
     if (this._messageHandler) {
       try { this._messageHandler(msg); } catch { /* app error */ }
     }
+  }
+
+  _handleStreamData(msg) {
+    const transferId = typeof msg.transfer_id === 'string' ? msg.transfer_id : null;
+    if (!transferId) return;
+    const seq = typeof msg.seq === 'number' ? msg.seq : 0;
+    const final = msg.is_final === true;
+    const b64 = typeof msg.data_b64 === 'string' ? msg.data_b64 : '';
+    const payload = Buffer.from(b64, 'base64');
+    const rawSeq = encodeSeq(seq, final);
+    this.onChunkFrame({ transfer_id: transferId, raw_seq: rawSeq, payload });
   }
 
   onChunkFrame(frame) {

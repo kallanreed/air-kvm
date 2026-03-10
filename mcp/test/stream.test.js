@@ -600,3 +600,99 @@ test('StreamReceiver: empty payload (zero bytes) is handled', async () => {
   assert.equal(errors.length, 1);
   assert.equal(errors[0].code, 'json_parse_failed');
 });
+
+// ---------------------------------------------------------------------------
+// JSON-only StreamSender mode (stream.data chunking)
+// ---------------------------------------------------------------------------
+
+test('StreamSender JSON-only: small object sent via writeJsonFn', async () => {
+  const cap = makeJsonCapture();
+  const sender = new StreamSender({ writeJsonFn: cap.writeJsonFn });
+  await sender.send({ type: 'hello', data: 'world' });
+  assert.equal(cap.messages.length, 1);
+  assert.equal(cap.messages[0].type, 'hello');
+});
+
+test('StreamSender JSON-only: large object chunked as stream.data', async () => {
+  const cap = makeJsonCapture();
+  const sender = new StreamSender({ writeJsonFn: cap.writeJsonFn, chunkSize: 50 });
+  const bigObj = { data: 'x'.repeat(200) };
+  const sendPromise = sender.send(bigObj);
+
+  // Wait for first chunk to appear, then feed acks.
+  const pump = async () => {
+    while (true) {
+      await new Promise((r) => setTimeout(r, 5));
+      const pending = cap.messages.filter((m) => m.type === 'stream.data');
+      for (const msg of pending) {
+        sender.onAck({ type: 'stream.ack', transfer_id: msg.transfer_id, seq: msg.seq });
+      }
+      if (pending.some((m) => m.is_final)) break;
+    }
+  };
+  await Promise.all([sendPromise, pump()]);
+
+  const chunks = cap.messages.filter((m) => m.type === 'stream.data');
+  assert.ok(chunks.length > 1, 'should have multiple chunks');
+  assert.ok(chunks.every((c) => typeof c.data_b64 === 'string'), 'all chunks have data_b64');
+  assert.ok(chunks.at(-1).is_final, 'last chunk is final');
+  assert.ok(!chunks[0].is_final, 'first chunk is not final');
+});
+
+test('StreamReceiver: stream.data control messages reassembled', async () => {
+  const cap = makeJsonCapture();
+  const receiver = new StreamReceiver({ writeJsonFn: cap.writeJsonFn });
+  const messages = [];
+  receiver.onMessage((msg) => messages.push(msg));
+
+  const obj = { type: 'js.exec.request', script: 'console.log("hi")' };
+  const json = JSON.stringify(obj);
+  const b64 = Buffer.from(json, 'utf8').toString('base64');
+
+  // Single-chunk stream.data (is_final = true)
+  receiver.onControlFrame({
+    type: 'stream.data',
+    transfer_id: 'tx_aabb0001',
+    seq: 0,
+    is_final: true,
+    data_b64: b64,
+  });
+
+  assert.equal(messages.length, 1);
+  assert.deepEqual(messages[0], obj);
+  const ack = cap.messages.find((m) => m.type === 'stream.ack');
+  assert.ok(ack, 'ack sent for stream.data');
+  assert.equal(ack.transfer_id, 'tx_aabb0001');
+});
+
+test('StreamReceiver: multi-chunk stream.data reassembled', async () => {
+  const cap = makeJsonCapture();
+  const receiver = new StreamReceiver({ writeJsonFn: cap.writeJsonFn });
+  const messages = [];
+  receiver.onMessage((msg) => messages.push(msg));
+
+  const obj = { type: 'test', payload: 'z'.repeat(300) };
+  const fullB64 = Buffer.from(JSON.stringify(obj), 'utf8');
+  const mid = Math.floor(fullB64.length / 2);
+  const chunk0 = fullB64.subarray(0, mid).toString('base64');
+  const chunk1 = fullB64.subarray(mid).toString('base64');
+
+  receiver.onControlFrame({
+    type: 'stream.data',
+    transfer_id: 'tx_ccdd0002',
+    seq: 0,
+    is_final: false,
+    data_b64: chunk0,
+  });
+  assert.equal(messages.length, 0, 'not yet complete');
+
+  receiver.onControlFrame({
+    type: 'stream.data',
+    transfer_id: 'tx_ccdd0002',
+    seq: 1,
+    is_final: true,
+    data_b64: chunk1,
+  });
+  assert.equal(messages.length, 1);
+  assert.deepEqual(messages[0], obj);
+});

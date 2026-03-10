@@ -146,27 +146,33 @@ test('airkvm_exec_js_tab returns structured json content', async () => {
   assert.equal(payload.value_json, '"ok"');
 });
 
-test('airkvm_exec_js_tab uses transfer prelude for oversized script', async () => {
-  const { sent, sentNoWait, waited, server } = makeHarness(async () => ({
-    ok: true,
-    data: {
-      type: 'js.exec.result',
-      request_id: 'js-large-1',
-      tab_id: 2,
-      duration_ms: 8,
-      value_type: 'string',
-      value_json: '"ok"',
-      truncated: false,
-      ts: 100
-    }
-  }), {
-    waitForFrame: async (collector) => collector({
-      type: 'transfer.ack',
-      request_id: 'js-large-1',
-      transfer_id: sentNoWait.find((entry) => entry.type === 'transfer.meta')?.transfer_id || 'tx_unknown',
-      highest_contiguous_seq: 999
-    }, null, [])
-  });
+test('airkvm_exec_js_tab uses stream send for oversized script', async () => {
+  const streamSentCommands = [];
+  const sent = [];
+  const transport = {
+    sendCommand: async () => ({ ok: true, msg: { ok: true } }),
+    streamRequest: async () => ({ ok: true, data: {} }),
+    streamSendCommand: async (command, collector) => {
+      streamSentCommands.push(command);
+      const result = collector({
+        type: 'js.exec.result',
+        request_id: 'js-large-1',
+        tab_id: 2,
+        duration_ms: 8,
+        value_type: 'string',
+        value_json: '"ok"',
+        truncated: false,
+        ts: 100
+      }, null, []);
+      return {
+        ok: typeof result.ok === 'boolean' ? result.ok : true,
+        msg: result.msg,
+        data: result.data,
+        frames: [],
+      };
+    },
+  };
+  const server = createServer({ transport, send: (msg) => sent.push(msg) });
   const largeScript = 'a'.repeat(5000);
 
   server.handleRequest({
@@ -179,66 +185,41 @@ test('airkvm_exec_js_tab uses transfer prelude for oversized script', async () =
     }
   });
 
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(sentNoWait.length > 0, true);
-  assert.equal(sentNoWait[0].type, 'transfer.meta');
-  assert.equal(sentNoWait.at(-1).type, 'transfer.done');
-  assert.equal(waited.length > 0, true);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(streamSentCommands.length, 1);
+  assert.equal(streamSentCommands[0].type, 'js.exec.request');
+  assert.equal(streamSentCommands[0].script, largeScript);
   const payload = JSON.parse(sent[0].result.content[0].text);
   assert.equal(payload.type, 'js.exec.result');
 });
 
-test('airkvm_exec_js_tab transfer upload retries from transfer.nack', async () => {
-  let waitCalls = 0;
-  const { sent, sentNoWait, server } = makeHarness(async () => ({
-    ok: true,
-    data: {
-      type: 'js.exec.result',
-      request_id: 'js-large-retry-1',
-      tab_id: 2,
-      duration_ms: 9,
-      value_type: 'string',
-      value_json: '"ok"',
-      truncated: false,
-      ts: 101
-    }
-  }), {
-    waitForFrame: async (collector) => {
-      waitCalls += 1;
-      const transferId = sentNoWait.find((entry) => entry.type === 'transfer.meta')?.transfer_id || 'tx_unknown';
-      if (waitCalls === 1) {
-        return collector({
-          type: 'transfer.nack',
-          request_id: 'js-large-retry-1',
-          transfer_id: transferId,
-          seq: 0
-        }, null, []);
-      }
-      return collector({
-        type: 'transfer.ack',
-        request_id: 'js-large-retry-1',
-        transfer_id: transferId,
-        highest_contiguous_seq: 999
-      }, null, []);
-    }
-  });
+test('airkvm_exec_js_tab stream send timeout surfaces as transport_error', async () => {
+  const sent = [];
+  const transport = {
+    sendCommand: async () => ({ ok: true, msg: { ok: true } }),
+    streamRequest: async () => ({ ok: true, data: {} }),
+    streamSendCommand: async () => {
+      throw new Error('stream_send_timeout');
+    },
+  };
+  const server = createServer({ transport, send: (msg) => sent.push(msg) });
+  const largeScript = 'c'.repeat(5000);
 
-  const largeScript = 'b'.repeat(5000);
   server.handleRequest({
     jsonrpc: '2.0',
-    id: 67,
+    id: 68,
     method: 'tools/call',
     params: {
       name: 'airkvm_exec_js_tab',
-      arguments: { request_id: 'js-large-retry-1', script: largeScript }
+      arguments: { request_id: 'js-timeout-1', script: largeScript }
     }
   });
 
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  const seqZeroChunks = sentNoWait.filter((entry) => entry.type === 'transfer.chunk' && entry.seq === 0);
-  assert.equal(seqZeroChunks.length >= 2, true);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(sent.length, 1);
   const payload = JSON.parse(sent[0].result.content[0].text);
-  assert.equal(payload.type, 'js.exec.result');
+  assert.equal(payload.error, 'transport_error');
+  assert.equal(payload.detail, 'stream_send_timeout');
 });
 
 test('airkvm_list_tabs returns structured json content', async () => {
