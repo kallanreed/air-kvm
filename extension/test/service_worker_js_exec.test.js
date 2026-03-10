@@ -34,6 +34,15 @@ function makeHarness() {
   });
   let blePostOk = true;
   let blePostBinaryOk = true;
+  let cdpWindowMethodMissing = false;
+  let getWindowImpl = async (windowId) => ({
+    id: windowId,
+    left: 130,
+    top: 70,
+    width: 1200,
+    height: 860,
+    state: 'normal'
+  });
 
   globalThis.self = { addEventListener: () => {} };
   globalThis.setInterval = () => 0;
@@ -72,6 +81,7 @@ function makeHarness() {
     },
     runtime: {
       id: 'test',
+      lastError: null,
       getURL: (path) => `chrome-extension://test/${path}`,
       sendMessage: async (msg) => {
         if (msg?.type === 'ble.post') {
@@ -112,6 +122,9 @@ function makeHarness() {
         createTabCalls.push(opts);
         return createTabImpl(opts);
       }
+    },
+    windows: {
+      get: async (windowId) => getWindowImpl(windowId)
     },
     debugger: {
       attach: (_target, _version, cb) => {
@@ -156,6 +169,18 @@ function makeHarness() {
           return;
         }
         if (method === 'Browser.getWindowForTarget') {
+          if (cdpWindowMethodMissing) {
+            const methodMissingMessage = JSON.stringify({
+              code: -32601,
+              message: '\'Browser.getWindowForTarget\' wasn\'t found'
+            });
+            globalThis.chrome.runtime.lastError = {
+              message: methodMissingMessage
+            };
+            cb(undefined);
+            globalThis.chrome.runtime.lastError = null;
+            return;
+          }
           cb({
             windowId: 1,
             bounds: {
@@ -207,6 +232,12 @@ function makeHarness() {
     },
     setBlePostBinaryOk: (ok) => {
       blePostBinaryOk = ok;
+    },
+    setCdpWindowMethodMissing: (missing) => {
+      cdpWindowMethodMissing = missing;
+    },
+    setGetWindowImpl: (impl) => {
+      getWindowImpl = impl;
     }
   };
 }
@@ -534,6 +565,36 @@ test('service worker handles window.bounds.request and posts window.bounds via b
   });
   const cdpCall = harness.cdpCommandCalls.find((entry) => entry.method === 'Browser.getWindowForTarget');
   assert.equal(Boolean(cdpCall), true);
+});
+
+test('service worker falls back to chrome.windows.get when Browser.getWindowForTarget is unavailable', async () => {
+  const harness = makeHarness();
+  await importServiceWorkerFresh();
+  harness.setCdpWindowMethodMissing(true);
+  harness.setGetWindowImpl(async (windowId) => ({
+    id: windowId,
+    left: 240,
+    top: 120,
+    width: 1440,
+    height: 900,
+    state: 'normal'
+  }));
+  const listener = findBleCommandListener(harness.runtimeListeners);
+  await callBleCommand(listener, {
+    type: 'window.bounds.request',
+    request_id: 'wb-fallback-1'
+  });
+
+  const payload = harness.postedPayloads.find((entry) => entry?.request_id === 'wb-fallback-1');
+  assert.equal(payload?.type, 'window.bounds');
+  assert.equal(payload?.window_id, 1);
+  assert.deepEqual(payload?.bounds, {
+    left: 240,
+    top: 120,
+    width: 1440,
+    height: 900,
+    window_state: 'normal'
+  });
 });
 
 test('service worker returns window.bounds.error when target tab is unavailable', async () => {

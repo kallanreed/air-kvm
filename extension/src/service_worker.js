@@ -1265,6 +1265,36 @@ function normalizeWindowBounds(bounds) {
   return Object.keys(normalized).length > 0 ? normalized : null;
 }
 
+function isMissingCdpMethodError(err, methodName) {
+  const text = String(err?.message || err || '');
+  if (text.includes(`'${methodName}' wasn't found`) || text.includes(`${methodName} wasn't found`)) {
+    return true;
+  }
+  try {
+    const parsed = JSON.parse(text);
+    return parsed?.code === -32601 && String(parsed?.message || '').includes(methodName);
+  } catch {
+    return false;
+  }
+}
+
+async function getWindowBoundsViaWindowsApi(tab) {
+  if (!chrome?.windows?.get || !Number.isInteger(tab?.windowId)) {
+    throw new Error('window_bounds_unavailable');
+  }
+  const windowInfo = await chrome.windows.get(tab.windowId);
+  return {
+    window_id: Number.isInteger(windowInfo?.id) ? windowInfo.id : tab.windowId,
+    bounds: normalizeWindowBounds({
+      windowState: windowInfo?.state,
+      left: windowInfo?.left,
+      top: windowInfo?.top,
+      width: windowInfo?.width,
+      height: windowInfo?.height
+    })
+  };
+}
+
 async function sendWindowBounds(command) {
   const requestId = command?.request_id || makeRequestId();
   const preferredTabId = Number.isInteger(command?.tab_id) ? command.tab_id : null;
@@ -1273,13 +1303,21 @@ async function sendWindowBounds(command) {
     throw new Error('active_tab_not_found');
   }
   lastAutomationTabId = tab.id;
-  const targetInfo = await withCdpSession(tab.id, async ({ sendCommand }) => {
-    const result = await sendCommand('Browser.getWindowForTarget');
-    return {
-      window_id: Number.isInteger(result?.windowId) ? result.windowId : null,
-      bounds: normalizeWindowBounds(result?.bounds || null)
-    };
-  });
+  let targetInfo = null;
+  try {
+    targetInfo = await withCdpSession(tab.id, async ({ sendCommand }) => {
+      const result = await sendCommand('Browser.getWindowForTarget');
+      return {
+        window_id: Number.isInteger(result?.windowId) ? result.windowId : null,
+        bounds: normalizeWindowBounds(result?.bounds || null)
+      };
+    });
+  } catch (err) {
+    if (!isMissingCdpMethodError(err, 'Browser.getWindowForTarget')) {
+      throw err;
+    }
+    targetInfo = await getWindowBoundsViaWindowsApi(tab);
+  }
 
   await postEventViaBridge({
     type: 'window.bounds',
