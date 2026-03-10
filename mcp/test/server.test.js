@@ -247,14 +247,8 @@ test('airkvm_list_tabs returns structured json content', async () => {
   assert.equal(payload.tabs.length, 1);
 });
 
-test('airkvm_dom_snapshot returns structured json content', async () => {
-  const { sent, server } = makeHarness(async () => ({
-    ok: true,
-    data: {
-      request_id: 'dom-1',
-      snapshot: { type: 'dom.snapshot', request_id: 'dom-1', summary: { title: 'Example' } }
-    }
-  }));
+test('airkvm_dom_snapshot errors when streamRequest is missing', async () => {
+  const { sent, server } = makeHarness();
 
   server.handleRequest({
     jsonrpc: '2.0',
@@ -267,16 +261,13 @@ test('airkvm_dom_snapshot returns structured json content', async () => {
   });
 
   await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(sent[0].isError, true);
   const payload = JSON.parse(sent[0].result.content[0].text);
-  assert.equal(payload.request_id, 'dom-1');
-  assert.equal(payload.snapshot.type, 'dom.snapshot');
+  assert.equal(payload.error, 'stream_transport_required');
 });
 
-test('airkvm_screenshot_tab returns structured error result on failure', async () => {
-  const { sent, server } = makeHarness(async () => ({
-    ok: false,
-    data: { request_id: 'shot-1', source: 'tab', error: 'permission_denied' }
-  }));
+test('airkvm_screenshot_tab errors when streamRequest is missing', async () => {
+  const { sent, server } = makeHarness();
 
   server.handleRequest({
     jsonrpc: '2.0',
@@ -291,57 +282,7 @@ test('airkvm_screenshot_tab returns structured error result on failure', async (
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(sent[0].isError, true);
   const payload = JSON.parse(sent[0].result.content[0].text);
-  assert.equal(payload.request_id, 'shot-1');
-  assert.equal(payload.error, 'permission_denied');
-});
-
-test('airkvm_dom_snapshot returns structured transport error payload', async () => {
-  const { sent, server } = makeHarness(async () => {
-    throw new Error('device_timeout');
-  });
-
-  server.handleRequest({
-    jsonrpc: '2.0',
-    id: 4,
-    method: 'tools/call',
-    params: {
-      name: 'airkvm_dom_snapshot',
-      arguments: { request_id: 'dom-timeout' }
-    }
-  });
-
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(sent[0].isError, true);
-  const payload = JSON.parse(sent[0].result.content[0].text);
-  assert.equal(payload.request_id, 'dom-timeout');
-  assert.equal(payload.error, 'transport_error');
-  assert.equal(payload.detail, 'device_timeout');
-});
-
-test('airkvm_dom_snapshot transport error includes diagnostics frames', async () => {
-  const err = new Error('device_timeout');
-  err.frames = [{ kind: 'log', msg: 'rx.uart {"type":"dom.snapshot.request"}' }];
-  err.recentFrames = [{ kind: 'ctrl', msg: { ok: true } }];
-  const { sent, server } = makeHarness(async () => {
-    throw err;
-  });
-
-  server.handleRequest({
-    jsonrpc: '2.0',
-    id: 5,
-    method: 'tools/call',
-    params: {
-      name: 'airkvm_dom_snapshot',
-      arguments: { request_id: 'dom-diag' }
-    }
-  });
-
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(sent[0].isError, true);
-  const payload = JSON.parse(sent[0].result.content[0].text);
-  assert.equal(payload.error, 'transport_error');
-  assert.equal(payload.diagnostics.frames.length, 1);
-  assert.equal(payload.diagnostics.recent_frames.length, 1);
+  assert.equal(payload.error, 'stream_transport_required');
 });
 
 // --- Stream-path tests (transport.streamRequest present) ---

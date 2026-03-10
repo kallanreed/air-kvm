@@ -314,25 +314,30 @@ export class UartTransport {
   async streamRequest(command, { timeoutMs = this.commandTimeoutMs } = {}) {
     const run = async () => {
       await this.open();
+      this.log(`streamRequest start type=${command?.type || 'unknown'}`);
       await this.writeRawCommand(command);
 
       return new Promise((resolve, reject) => {
         let timer = null;
         let finished = false;
+        let chunkCount = 0;
 
         const receiver = new StreamReceiver({
           writeJsonFn: async (obj) => {
+            this.log(`streamRequest ack type=${obj?.type} tid=${obj?.transfer_id} seq=${obj?.seq}`);
             await this.writeRawCommand(obj);
           },
         });
 
         receiver.onMessage((msg) => {
           if (finished) return;
+          this.log(`streamRequest complete chunks=${chunkCount} type=${msg?.type || 'unknown'}`);
           finish(resolve, { ok: true, data: msg });
         });
 
         receiver.onError((err) => {
           if (finished) return;
+          this.log(`streamRequest error code=${err.code} tid=${err.transfer_id}`);
           finish(reject, new Error(`stream_error:${err.code}`));
         });
 
@@ -361,6 +366,7 @@ export class UartTransport {
             if (finished) return;
             armTimer(timeoutMs);
             if (frame.kind === 'bin') {
+              chunkCount += 1;
               receiver.onChunkFrame({
                 transfer_id: frame.transfer_id,
                 raw_seq: frame.seq,
@@ -385,6 +391,7 @@ export class UartTransport {
   async streamSendCommand(command, responseCollector, { timeoutMs = this.commandTimeoutMs } = {}) {
     const run = async () => {
       await this.open();
+      this.log(`streamSendCommand start type=${command?.type || 'unknown'} bytes=${JSON.stringify(command).length}`);
 
       const sender = new StreamSender({
         writeJsonFn: async (obj) => { await this.writeRawCommand(obj); },
@@ -398,6 +405,7 @@ export class UartTransport {
           finished = true;
           this.currentWaiter = null;
           sender.reset();
+          this.log('streamSendCommand send phase timeout');
           reject(new Error('stream_send_timeout'));
         }, timeoutMs);
 
@@ -417,12 +425,14 @@ export class UartTransport {
           finished = true;
           clearTimeout(timer);
           this.currentWaiter = null;
+          this.log('streamSendCommand send phase complete');
           resolve();
         }).catch((err) => {
           if (finished) return;
           finished = true;
           clearTimeout(timer);
           this.currentWaiter = null;
+          this.log(`streamSendCommand send phase error: ${err.message}`);
           reject(err);
         });
       });

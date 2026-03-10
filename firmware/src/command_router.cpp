@@ -29,18 +29,6 @@ bool IsBridgePassthroughType(airkvm::CommandType type) {
     case airkvm::CommandType::kScreenshotMeta:
     case airkvm::CommandType::kScreenshotChunk:
     case airkvm::CommandType::kScreenshotError:
-    case airkvm::CommandType::kTransferMeta:
-    case airkvm::CommandType::kTransferChunk:
-    case airkvm::CommandType::kTransferDone:
-    case airkvm::CommandType::kTransferDoneAck:
-    case airkvm::CommandType::kTransferAck:
-    case airkvm::CommandType::kTransferNack:
-    case airkvm::CommandType::kTransferResume:
-    case airkvm::CommandType::kTransferCancel:
-    case airkvm::CommandType::kTransferCancelOk:
-    case airkvm::CommandType::kTransferReset:
-    case airkvm::CommandType::kTransferResetOk:
-    case airkvm::CommandType::kTransferError:
     case airkvm::CommandType::kStreamAck:
     case airkvm::CommandType::kStreamNack:
     case airkvm::CommandType::kStreamReset:
@@ -163,18 +151,6 @@ bool CommandRouter::HandleCommand(const airkvm::Command& cmd, const char* source
     case airkvm::CommandType::kScreenshotMeta:
     case airkvm::CommandType::kScreenshotChunk:
     case airkvm::CommandType::kScreenshotError:
-    case airkvm::CommandType::kTransferMeta:
-    case airkvm::CommandType::kTransferChunk:
-    case airkvm::CommandType::kTransferDone:
-    case airkvm::CommandType::kTransferDoneAck:
-    case airkvm::CommandType::kTransferAck:
-    case airkvm::CommandType::kTransferNack:
-    case airkvm::CommandType::kTransferResume:
-    case airkvm::CommandType::kTransferCancel:
-    case airkvm::CommandType::kTransferCancelOk:
-    case airkvm::CommandType::kTransferReset:
-    case airkvm::CommandType::kTransferResetOk:
-    case airkvm::CommandType::kTransferError:
     case airkvm::CommandType::kStreamAck:
     case airkvm::CommandType::kStreamNack:
     case airkvm::CommandType::kStreamReset: {

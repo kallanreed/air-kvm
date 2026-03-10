@@ -119,11 +119,25 @@ export function createServer({ transport, send }) {
     }
 
     const line = toDeviceLine(command).trim();
-    const useStream = (
+    const isStreamOnlyTool = (
       name === 'airkvm_dom_snapshot' ||
       name === 'airkvm_screenshot_tab' ||
       name === 'airkvm_screenshot_desktop'
-    ) && typeof transport.streamRequest === 'function';
+    );
+    if (isStreamOnlyTool && typeof transport.streamRequest !== 'function') {
+      send({
+        jsonrpc: '2.0',
+        id,
+        result: makeToolResultJson({
+          request_id: command.request_id || null,
+          error: 'stream_transport_required',
+          detail: `${name} requires transport.streamRequest`
+        }),
+        isError: true
+      });
+      return;
+    }
+    const useStream = isStreamOnlyTool;
 
     const runTransport = (() => {
       if (useStream) {
