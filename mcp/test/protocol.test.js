@@ -112,10 +112,20 @@ test('validateAgentCommand rejects js.exec.request when script is too long', () 
   const result = validateAgentCommand({
     type: 'js.exec.request',
     request_id: 'js-1',
-    script: 'a'.repeat(601)
+    script: 'a'.repeat(12001)
   });
   assert.equal(result.ok, false);
   assert.equal(result.error, 'invalid_js_exec_request');
+});
+
+test('validateAgentCommand accepts js.exec.request with script_transfer_id', () => {
+  const result = validateAgentCommand({
+    type: 'js.exec.request',
+    request_id: 'js-xfer-1',
+    script_transfer_id: 'tx_1234abcd',
+    tab_id: 5
+  });
+  assert.equal(result.ok, true);
 });
 
 test('validateAgentCommand rejects js.exec.request when timeout is out of range', () => {

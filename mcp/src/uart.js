@@ -132,22 +132,32 @@ export class UartTransport {
     }
   }
 
+  async writeRawCommand(command) {
+    const line = `${JSON.stringify(command)}\n`;
+    this.log(`tx line=${line.trim()}`);
+    await new Promise((resolve, reject) => {
+      this.serialPort.write(line, (err) => {
+        if (err) reject(err);
+        else this.serialPort.drain((drainErr) => (drainErr ? reject(drainErr) : resolve()));
+      });
+    });
+  }
+
+  async sendCommandNoWait(command) {
+    const run = async () => {
+      await this.open();
+      await this.writeRawCommand(command);
+      return { ok: true };
+    };
+    const scheduled = this.sendQueue.then(run, run);
+    this.sendQueue = scheduled.catch(() => {});
+    return scheduled;
+  }
+
   async sendCommand(command, responseCollector = null) {
     const run = async () => {
       await this.open();
-
-      const writeRawCommand = async (cmd) => {
-        const line = `${JSON.stringify(cmd)}\n`;
-        this.log(`tx line=${line.trim()}`);
-        await new Promise((resolve, reject) => {
-          this.serialPort.write(line, (err) => {
-            if (err) reject(err);
-            else this.serialPort.drain((drainErr) => (drainErr ? reject(drainErr) : resolve()));
-          });
-        });
-      };
-
-      await writeRawCommand(command);
+      await this.writeRawCommand(command);
 
       return new Promise((resolve, reject) => {
         const frames = [];
@@ -160,7 +170,7 @@ export class UartTransport {
           for (const outbound of commands) {
             this.log(`collector outbound=${JSON.stringify(outbound)}`);
             controlWriteQueue = controlWriteQueue
-              .then(() => writeRawCommand(outbound))
+              .then(() => this.writeRawCommand(outbound))
               .catch((err) => {
                 this.log(`collector tx error: ${err?.message || err}`);
               });

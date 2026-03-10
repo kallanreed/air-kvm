@@ -72,7 +72,7 @@ export const TOOL_DEFINITIONS = [
       type: 'object',
       properties: {
         request_id: { type: 'string' },
-        script: { type: 'string', minLength: 1, maxLength: 600 },
+        script: { type: 'string', minLength: 1, maxLength: 12000 },
         tab_id: { type: 'integer' },
         timeout_ms: { type: 'integer', minimum: 50, maximum: 2000 },
         max_result_chars: { type: 'integer', minimum: 64, maximum: 700 }

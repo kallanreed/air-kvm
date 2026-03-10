@@ -53,7 +53,15 @@ export function validateAgentCommand(msg) {
       if (typeof msg.request_id !== 'string') {
         return { ok: false, error: 'invalid_js_exec_request' };
       }
-      if (typeof msg.script !== 'string' || msg.script.length < 1 || msg.script.length > 600) {
+      const hasInlineScript = typeof msg.script === 'string' && msg.script.length > 0;
+      const hasTransferScript = typeof msg.script_transfer_id === 'string' && msg.script_transfer_id.length > 0;
+      if (!hasInlineScript && !hasTransferScript) {
+        return { ok: false, error: 'invalid_js_exec_request' };
+      }
+      if (hasInlineScript && msg.script.length > 12000) {
+        return { ok: false, error: 'invalid_js_exec_request' };
+      }
+      if (typeof msg.script_transfer_id !== 'undefined' && !hasTransferScript) {
         return { ok: false, error: 'invalid_js_exec_request' };
       }
       if (typeof msg.tab_id !== 'undefined' && !Number.isInteger(msg.tab_id)) {

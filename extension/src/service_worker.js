@@ -8,7 +8,7 @@ const kScreenshotStageTimeoutMs = 10000;
 const kTransferAckWindow = 8;
 const kTransferTtlMs = 2 * 60 * 1000;
 const kJsExecScriptMinChars = 1;
-const kJsExecScriptMaxChars = 600;
+const kJsExecScriptMaxChars = 12000;
 const kJsExecTimeoutMsMin = 50;
 const kJsExecTimeoutMsMax = 2000;
 const kJsExecTimeoutMsDefault = 750;
@@ -27,6 +27,7 @@ let bridgeTraceSeq = 0;
 let screenshotInFlight = false;
 let jsExecInFlight = false;
 const screenshotTransfers = new Map();
+const inboundScriptTransfers = new Map();
 const kSwInstanceId = `sw_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
 let debugEnabled = kDebugDefault;
 
@@ -44,7 +45,10 @@ function debugLog(...args) {
 }
 
 function activeTransferIds() {
-  return Array.from(screenshotTransfers.keys());
+  return [
+    ...Array.from(screenshotTransfers.keys()),
+    ...Array.from(inboundScriptTransfers.keys())
+  ];
 }
 
 async function writeSwBreadcrumb(event, detail = null) {
@@ -490,6 +494,58 @@ function normalizeJsExecCommand(command) {
   };
 }
 
+function pruneInboundScriptTransfers(nowTs = Date.now()) {
+  for (const [transferId, session] of inboundScriptTransfers.entries()) {
+    if (!session || nowTs - (session.updatedAt || 0) > kTransferTtlMs) {
+      inboundScriptTransfers.delete(transferId);
+    }
+  }
+}
+
+function decodeBase64ToBytes(text) {
+  const raw = atob(String(text || ''));
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i += 1) {
+    out[i] = raw.charCodeAt(i);
+  }
+  return out;
+}
+
+function resolveJsExecScript(command) {
+  if (typeof command?.script === 'string' && command.script.length > 0) {
+    return command.script;
+  }
+  const transferId = typeof command?.script_transfer_id === 'string' ? command.script_transfer_id : null;
+  if (!transferId) {
+    throw new Error('invalid_js_exec_request');
+  }
+  pruneInboundScriptTransfers();
+  const session = inboundScriptTransfers.get(transferId);
+  if (!session) {
+    throw new Error('js_exec_script_transfer_not_found');
+  }
+  if (!session.done || !Number.isInteger(session.totalChunks) || session.totalChunks < 0) {
+    throw new Error('js_exec_script_transfer_incomplete');
+  }
+  const ordered = [];
+  for (let seq = 0; seq < session.totalChunks; seq += 1) {
+    const chunk = session.chunksBySeq.get(seq);
+    if (!(chunk instanceof Uint8Array)) {
+      throw new Error('js_exec_script_transfer_incomplete');
+    }
+    ordered.push(chunk);
+  }
+  inboundScriptTransfers.delete(transferId);
+  const totalBytes = ordered.reduce((sum, b) => sum + b.length, 0);
+  const merged = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const bytes of ordered) {
+    merged.set(bytes, offset);
+    offset += bytes.length;
+  }
+  return new TextDecoder().decode(merged);
+}
+
 async function executeScriptViaCdp(tabId, script, maxResultChars) {
   return withCdpSession(tabId, async ({ sendCommand }) => {
     await sendCommand('Page.enable');
@@ -557,7 +613,8 @@ async function sendJsExec(command) {
   }
   jsExecInFlight = true;
   try {
-    const normalized = normalizeJsExecCommand(command);
+    const script = resolveJsExecScript(command);
+    const normalized = normalizeJsExecCommand({ ...command, script });
     requestId = normalized.requestId;
     resolvedTabId = normalized.tabId;
     const tab = await resolveTargetTab(normalized.tabId);
@@ -1194,6 +1251,7 @@ async function handleTransferCancel(command) {
 
 async function handleTransferReset(command) {
   screenshotTransfers.clear();
+  inboundScriptTransfers.clear();
   void writeSwBreadcrumb('transfer_reset', {
     request_id: command?.request_id || null
   });
@@ -1428,6 +1486,73 @@ const kBleCommandHandlers = {
     'handleTransferResume',
     handleTransferResume,
     async (cmd, detail) => sendTransferError(cmd, 'transfer_resume_failed', detail)
+  ),
+  'transfer.meta': (command) => runBridgeHandler(
+    command,
+    'handleTransferMeta',
+    async (cmd) => {
+      if (cmd?.source !== 'js.exec.script') return;
+      const transferId = typeof cmd?.transfer_id === 'string' ? cmd.transfer_id : null;
+      const requestId = typeof cmd?.request_id === 'string' ? cmd.request_id : null;
+      const totalChunks = Number.isInteger(cmd?.total_chunks) ? cmd.total_chunks : null;
+      if (!transferId || !requestId || totalChunks === null || totalChunks < 0) {
+        throw new Error('invalid_transfer_meta');
+      }
+      pruneInboundScriptTransfers();
+      inboundScriptTransfers.set(transferId, {
+        transferId,
+        requestId,
+        totalChunks,
+        totalBytes: Number.isInteger(cmd?.total_bytes) ? cmd.total_bytes : null,
+        chunksBySeq: new Map(),
+        done: false,
+        updatedAt: Date.now()
+      });
+    },
+    async (cmd, detail) => sendTransferError(cmd, 'transfer_meta_failed', detail)
+  ),
+  'transfer.chunk': (command) => runBridgeHandler(
+    command,
+    'handleTransferChunk',
+    async (cmd) => {
+      if (cmd?.source !== 'js.exec.script') return;
+      const transferId = typeof cmd?.transfer_id === 'string' ? cmd.transfer_id : null;
+      const seq = Number.isInteger(cmd?.seq) ? cmd.seq : null;
+      const dataB64 = typeof cmd?.data_b64 === 'string' ? cmd.data_b64 : null;
+      if (!transferId || seq === null || seq < 0 || !dataB64) {
+        throw new Error('invalid_transfer_chunk');
+      }
+      pruneInboundScriptTransfers();
+      const session = inboundScriptTransfers.get(transferId);
+      if (!session) {
+        throw new Error('no_such_transfer');
+      }
+      if (seq >= session.totalChunks) {
+        throw new Error('invalid_seq');
+      }
+      session.chunksBySeq.set(seq, decodeBase64ToBytes(dataB64));
+      session.updatedAt = Date.now();
+    },
+    async (cmd, detail) => sendTransferError(cmd, 'transfer_chunk_failed', detail)
+  ),
+  'transfer.done': (command) => runBridgeHandler(
+    command,
+    'handleInboundTransferDone',
+    async (cmd) => {
+      if (cmd?.source !== 'js.exec.script') return;
+      const transferId = typeof cmd?.transfer_id === 'string' ? cmd.transfer_id : null;
+      if (!transferId) {
+        throw new Error('invalid_transfer_done');
+      }
+      pruneInboundScriptTransfers();
+      const session = inboundScriptTransfers.get(transferId);
+      if (!session) {
+        throw new Error('no_such_transfer');
+      }
+      session.done = true;
+      session.updatedAt = Date.now();
+    },
+    async (cmd, detail) => sendTransferError(cmd, 'transfer_done_failed', detail)
   ),
   'transfer.ack': (command) => runBridgeHandler(
     command,

@@ -334,6 +334,48 @@ test('service worker handles js.exec.request and posts js.exec.result via bridge
   assert.equal(resultPayload.truncated, false);
 });
 
+test('service worker handles js.exec.request with script_transfer_id', async () => {
+  const harness = makeHarness();
+  await importServiceWorkerFresh();
+  const listener = findBleCommandListener(harness.runtimeListeners);
+  const transferId = 'tx_abcdef01';
+  const script = 'return document.title;';
+  const scriptB64 = Buffer.from(script, 'utf8').toString('base64');
+
+  await callBleCommand(listener, {
+    type: 'transfer.meta',
+    source: 'js.exec.script',
+    request_id: 'js-xfer-1',
+    transfer_id: transferId,
+    total_chunks: 1,
+    total_bytes: script.length
+  });
+  await callBleCommand(listener, {
+    type: 'transfer.chunk',
+    source: 'js.exec.script',
+    request_id: 'js-xfer-1',
+    transfer_id: transferId,
+    seq: 0,
+    data_b64: scriptB64
+  });
+  await callBleCommand(listener, {
+    type: 'transfer.done',
+    source: 'js.exec.script',
+    request_id: 'js-xfer-1',
+    transfer_id: transferId,
+    total_chunks: 1
+  });
+
+  await callBleCommand(listener, {
+    type: 'js.exec.request',
+    request_id: 'js-xfer-1',
+    script_transfer_id: transferId
+  });
+
+  const payload = harness.postedPayloads.find((entry) => entry?.request_id === 'js-xfer-1');
+  assert.equal(payload?.type, 'js.exec.result');
+});
+
 test('service worker returns js_exec_busy when a js exec request is already in flight', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();

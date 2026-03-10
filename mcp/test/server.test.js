@@ -5,14 +5,19 @@ import { createServer } from '../src/server.js';
 
 function makeHarness(sendCommandImpl) {
   const sent = [];
+  const sentNoWait = [];
   const transport = {
-    sendCommand: sendCommandImpl || (async () => ({ ok: true, msg: { ok: true } }))
+    sendCommand: sendCommandImpl || (async () => ({ ok: true, msg: { ok: true } })),
+    sendCommandNoWait: async (command) => {
+      sentNoWait.push(command);
+      return { ok: true };
+    }
   };
   const server = createServer({
     transport,
     send: (msg) => sent.push(msg)
   });
-  return { sent, server };
+  return { sent, sentNoWait, server };
 }
 
 test('tools/list includes structured tools', () => {
@@ -132,6 +137,40 @@ test('airkvm_exec_js_tab returns structured json content', async () => {
   assert.equal(payload.type, 'js.exec.result');
   assert.equal(payload.request_id, 'js-1');
   assert.equal(payload.value_json, '"ok"');
+});
+
+test('airkvm_exec_js_tab uses transfer prelude for oversized script', async () => {
+  const { sent, sentNoWait, server } = makeHarness(async () => ({
+    ok: true,
+    data: {
+      type: 'js.exec.result',
+      request_id: 'js-large-1',
+      tab_id: 2,
+      duration_ms: 8,
+      value_type: 'string',
+      value_json: '"ok"',
+      truncated: false,
+      ts: 100
+    }
+  }));
+  const largeScript = 'a'.repeat(5000);
+
+  server.handleRequest({
+    jsonrpc: '2.0',
+    id: 66,
+    method: 'tools/call',
+    params: {
+      name: 'airkvm_exec_js_tab',
+      arguments: { request_id: 'js-large-1', script: largeScript }
+    }
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(sentNoWait.length > 0, true);
+  assert.equal(sentNoWait[0].type, 'transfer.meta');
+  assert.equal(sentNoWait.at(-1).type, 'transfer.done');
+  const payload = JSON.parse(sent[0].result.content[0].text);
+  assert.equal(payload.type, 'js.exec.result');
 });
 
 test('airkvm_list_tabs returns structured json content', async () => {
