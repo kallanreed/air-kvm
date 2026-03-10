@@ -30,6 +30,18 @@ export const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'airkvm_window_bounds',
+    description: 'Get browser window bounds in desktop coordinates for the target tab.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        request_id: { type: 'string' },
+        tab_id: { type: 'integer' }
+      },
+      required: []
+    }
+  },
+  {
     name: 'airkvm_open_tab',
     description: 'Open a new browser tab on the target extension machine.',
     inputSchema: {
@@ -136,6 +148,7 @@ export function isStructuredTool(name) {
   return (
     name === 'airkvm_dom_snapshot' ||
     name === 'airkvm_list_tabs' ||
+    name === 'airkvm_window_bounds' ||
     name === 'airkvm_open_tab' ||
     name === 'airkvm_exec_js_tab' ||
     name === 'airkvm_screenshot_tab' ||
@@ -163,6 +176,11 @@ export function buildCommandForTool(name, args = {}) {
 
   if (name === 'airkvm_list_tabs') {
     return { type: 'tabs.list.request', request_id: requestId };
+  }
+  if (name === 'airkvm_window_bounds') {
+    const command = { type: 'window.bounds.request', request_id: requestId };
+    if (Number.isInteger(args?.tab_id)) command.tab_id = args.tab_id;
+    return command;
   }
   if (name === 'airkvm_open_tab') {
     const command = {
@@ -550,6 +568,34 @@ export function createResponseCollector(name, command) {
           done: true,
           ok: false,
           data: { request_id: requestId, error: msg.error || 'tab_open_error', detail: msg }
+        };
+      }
+      return null;
+    };
+  }
+
+  if (name === 'airkvm_window_bounds') {
+    const requestId = command.request_id;
+    return (msg) => {
+      if (isCorrelatedDeviceRejection(msg, requestId)) {
+        return {
+          done: true,
+          ok: false,
+          data: { request_id: requestId, error: msg.error || 'device_rejected', device: msg }
+        };
+      }
+      if (msg?.type === 'window.bounds' && msg?.request_id === requestId) {
+        return {
+          done: true,
+          ok: true,
+          data: msg
+        };
+      }
+      if (msg?.type === 'window.bounds.error' && msg?.request_id === requestId) {
+        return {
+          done: true,
+          ok: false,
+          data: { request_id: requestId, error: msg.error || 'window_bounds_error', detail: msg }
         };
       }
       return null;

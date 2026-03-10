@@ -79,6 +79,15 @@ void test_parse_tabs_list_request() {
   TEST_ASSERT_EQUAL_STRING("tabs-1", cmd->request_id.c_str());
 }
 
+void test_parse_window_bounds_request() {
+  const auto cmd = airkvm::ParseCommandLine(
+      "{\"type\":\"window.bounds.request\",\"request_id\":\"wb-1\",\"tab_id\":7}");
+  TEST_ASSERT_TRUE(cmd.has_value());
+  TEST_ASSERT_EQUAL_INT(
+      static_cast<int>(airkvm::CommandType::kWindowBoundsRequest), static_cast<int>(cmd->type));
+  TEST_ASSERT_EQUAL_STRING("wb-1", cmd->request_id.c_str());
+}
+
 void test_parse_tab_open_request() {
   const auto cmd = airkvm::ParseCommandLine(
       "{\"type\":\"tab.open.request\",\"request_id\":\"open-1\",\"url\":\"https://example.com\",\"active\":true}");
@@ -133,6 +142,24 @@ void test_parse_js_exec_error() {
   TEST_ASSERT_EQUAL_STRING("js-1", cmd->request_id.c_str());
 }
 
+void test_parse_window_bounds() {
+  const auto cmd = airkvm::ParseCommandLine(
+      "{\"type\":\"window.bounds\",\"request_id\":\"wb-1\",\"window_id\":1}");
+  TEST_ASSERT_TRUE(cmd.has_value());
+  TEST_ASSERT_EQUAL_INT(
+      static_cast<int>(airkvm::CommandType::kWindowBounds), static_cast<int>(cmd->type));
+  TEST_ASSERT_EQUAL_STRING("wb-1", cmd->request_id.c_str());
+}
+
+void test_parse_window_bounds_error() {
+  const auto cmd = airkvm::ParseCommandLine(
+      "{\"type\":\"window.bounds.error\",\"request_id\":\"wb-1\",\"error\":\"active_tab_not_found\"}");
+  TEST_ASSERT_TRUE(cmd.has_value());
+  TEST_ASSERT_EQUAL_INT(
+      static_cast<int>(airkvm::CommandType::kWindowBoundsError), static_cast<int>(cmd->type));
+  TEST_ASSERT_EQUAL_STRING("wb-1", cmd->request_id.c_str());
+}
+
 void test_ack_json_ok() {
   const auto s = airkvm::AckJson("abc", true);
   TEST_ASSERT_EQUAL_STRING("{\"id\":\"abc\",\"ok\":true}", s.c_str());
@@ -150,12 +177,15 @@ int main(int, char**) {
   RUN_TEST(test_parse_dom_snapshot_request);
   RUN_TEST(test_parse_screenshot_chunk);
   RUN_TEST(test_parse_tabs_list_request);
+  RUN_TEST(test_parse_window_bounds_request);
   RUN_TEST(test_parse_tab_open_request);
   RUN_TEST(test_parse_tab_open_error);
   RUN_TEST(test_parse_transfer_resume);
   RUN_TEST(test_parse_js_exec_request);
   RUN_TEST(test_parse_js_exec_result);
   RUN_TEST(test_parse_js_exec_error);
+  RUN_TEST(test_parse_window_bounds);
+  RUN_TEST(test_parse_window_bounds_error);
   RUN_TEST(test_ack_json_ok);
   return UNITY_END();
 }

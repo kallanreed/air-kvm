@@ -156,6 +156,13 @@ std::optional<Command> ParseCommandLine(const std::string& line) {
     return cmd;
   }
 
+  if (Contains(line, "\"type\":\"window.bounds.request\"")) {
+    cmd.type = CommandType::kWindowBoundsRequest;
+    cmd.request_id = ExtractString(line, "request_id");
+    cmd.raw = line;
+    return cmd;
+  }
+
   if (Contains(line, "\"type\":\"tab.open.request\"")) {
     cmd.type = CommandType::kTabOpenRequest;
     cmd.request_id = ExtractString(line, "request_id");
@@ -192,6 +199,13 @@ std::optional<Command> ParseCommandLine(const std::string& line) {
     return cmd;
   }
 
+  if (Contains(line, "\"type\":\"window.bounds\"")) {
+    cmd.type = CommandType::kWindowBounds;
+    cmd.request_id = ExtractString(line, "request_id");
+    cmd.raw = line;
+    return cmd;
+  }
+
   if (Contains(line, "\"type\":\"tab.open.error\"")) {
     cmd.type = CommandType::kTabOpenError;
     cmd.request_id = ExtractString(line, "request_id");
@@ -222,6 +236,13 @@ std::optional<Command> ParseCommandLine(const std::string& line) {
 
   if (Contains(line, "\"type\":\"tabs.list.error\"")) {
     cmd.type = CommandType::kTabsListError;
+    cmd.request_id = ExtractString(line, "request_id");
+    cmd.raw = line;
+    return cmd;
+  }
+
+  if (Contains(line, "\"type\":\"window.bounds.error\"")) {
+    cmd.type = CommandType::kWindowBoundsError;
     cmd.request_id = ExtractString(line, "request_id");
     cmd.raw = line;
     return cmd;

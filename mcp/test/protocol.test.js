@@ -91,6 +91,23 @@ test('validateAgentCommand accepts js.exec.request within bounds', () => {
   assert.equal(result.ok, true);
 });
 
+test('validateAgentCommand accepts window.bounds.request within bounds', () => {
+  const result = validateAgentCommand({
+    type: 'window.bounds.request',
+    request_id: 'wb-1',
+    tab_id: 5
+  });
+  assert.equal(result.ok, true);
+});
+
+test('validateAgentCommand rejects window.bounds.request without request_id', () => {
+  const result = validateAgentCommand({
+    type: 'window.bounds.request'
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'invalid_window_bounds_request');
+});
+
 test('validateAgentCommand rejects js.exec.request when script is too long', () => {
   const result = validateAgentCommand({
     type: 'js.exec.request',

@@ -23,12 +23,49 @@ test('tools/list includes structured tools', () => {
   assert.deepEqual(names, [
     'airkvm_send',
     'airkvm_list_tabs',
+    'airkvm_window_bounds',
     'airkvm_open_tab',
     'airkvm_dom_snapshot',
     'airkvm_exec_js_tab',
     'airkvm_screenshot_tab',
     'airkvm_screenshot_desktop'
   ]);
+});
+
+test('airkvm_window_bounds returns structured json content', async () => {
+  const { sent, server } = makeHarness(async () => ({
+    ok: true,
+    data: {
+      type: 'window.bounds',
+      request_id: 'wb-1',
+      tab_id: 2,
+      window_id: 5,
+      bounds: {
+        left: 80,
+        top: 40,
+        width: 1280,
+        height: 900,
+        window_state: 'normal'
+      },
+      ts: 55
+    }
+  }));
+
+  server.handleRequest({
+    jsonrpc: '2.0',
+    id: 8,
+    method: 'tools/call',
+    params: {
+      name: 'airkvm_window_bounds',
+      arguments: { request_id: 'wb-1' }
+    }
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const payload = JSON.parse(sent[0].result.content[0].text);
+  assert.equal(payload.type, 'window.bounds');
+  assert.equal(payload.request_id, 'wb-1');
+  assert.equal(payload.bounds.left, 80);
 });
 
 test('airkvm_open_tab returns structured json content', async () => {

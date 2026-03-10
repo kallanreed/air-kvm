@@ -1252,6 +1252,45 @@ async function sendOpenTab(command) {
   });
 }
 
+function normalizeWindowBounds(bounds) {
+  if (!bounds || typeof bounds !== 'object') {
+    return null;
+  }
+  const normalized = {};
+  if (typeof bounds.windowState === 'string') normalized.window_state = bounds.windowState;
+  if (typeof bounds.left === 'number' && Number.isFinite(bounds.left)) normalized.left = Math.round(bounds.left);
+  if (typeof bounds.top === 'number' && Number.isFinite(bounds.top)) normalized.top = Math.round(bounds.top);
+  if (typeof bounds.width === 'number' && Number.isFinite(bounds.width)) normalized.width = Math.round(bounds.width);
+  if (typeof bounds.height === 'number' && Number.isFinite(bounds.height)) normalized.height = Math.round(bounds.height);
+  return Object.keys(normalized).length > 0 ? normalized : null;
+}
+
+async function sendWindowBounds(command) {
+  const requestId = command?.request_id || makeRequestId();
+  const preferredTabId = Number.isInteger(command?.tab_id) ? command.tab_id : null;
+  const tab = await resolveTargetTab(preferredTabId);
+  if (!tab?.id) {
+    throw new Error('active_tab_not_found');
+  }
+  lastAutomationTabId = tab.id;
+  const targetInfo = await withCdpSession(tab.id, async ({ sendCommand }) => {
+    const result = await sendCommand('Browser.getWindowForTarget');
+    return {
+      window_id: Number.isInteger(result?.windowId) ? result.windowId : null,
+      bounds: normalizeWindowBounds(result?.bounds || null)
+    };
+  });
+
+  await postEventViaBridge({
+    type: 'window.bounds',
+    request_id: requestId,
+    tab_id: tab.id,
+    window_id: targetInfo?.window_id ?? null,
+    bounds: targetInfo?.bounds ?? null,
+    ts: Date.now()
+  });
+}
+
 async function runBridgeHandler(command, label, handler, onError) {
   try {
     await handler(command);
@@ -1299,6 +1338,20 @@ const kBleCommandHandlers = {
         type: 'tabs.list.error',
         request_id: cmd.request_id || null,
         error: detail,
+        ts: Date.now()
+      });
+    }
+  ),
+  'window.bounds.request': (command) => runBridgeHandler(
+    command,
+    'sendWindowBounds',
+    sendWindowBounds,
+    async (cmd, detail) => {
+      await postEventViaBridge({
+        type: 'window.bounds.error',
+        request_id: cmd?.request_id || null,
+        tab_id: Number.isInteger(cmd?.tab_id) ? cmd.tab_id : null,
+        error: clipText(detail || 'window_bounds_failed'),
         ts: Date.now()
       });
     }

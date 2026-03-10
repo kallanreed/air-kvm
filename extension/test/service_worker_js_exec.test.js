@@ -155,6 +155,19 @@ function makeHarness() {
           cb({ data: cdpCapturePngBase64 });
           return;
         }
+        if (method === 'Browser.getWindowForTarget') {
+          cb({
+            windowId: 1,
+            bounds: {
+              left: 120,
+              top: 60,
+              width: 1280,
+              height: 900,
+              windowState: 'normal'
+            }
+          });
+          return;
+        }
         cb({});
       },
       onEvent: { addListener: () => {}, removeListener: () => {} },
@@ -497,6 +510,48 @@ test('service worker returns tab.open.error when chrome.tabs.create fails', asyn
   const payload = harness.postedPayloads.find((entry) => entry?.request_id === 'open-err');
   assert.equal(payload?.type, 'tab.open.error');
   assert.equal(payload?.error, 'tabs_create_failed');
+});
+
+test('service worker handles window.bounds.request and posts window.bounds via bridge', async () => {
+  const harness = makeHarness();
+  await importServiceWorkerFresh();
+  const listener = findBleCommandListener(harness.runtimeListeners);
+  await callBleCommand(listener, {
+    type: 'window.bounds.request',
+    request_id: 'wb-1'
+  });
+
+  const payload = harness.postedPayloads.find((entry) => entry?.request_id === 'wb-1');
+  assert.equal(payload?.type, 'window.bounds');
+  assert.equal(payload?.tab_id, 9);
+  assert.equal(payload?.window_id, 1);
+  assert.deepEqual(payload?.bounds, {
+    left: 120,
+    top: 60,
+    width: 1280,
+    height: 900,
+    window_state: 'normal'
+  });
+  const cdpCall = harness.cdpCommandCalls.find((entry) => entry.method === 'Browser.getWindowForTarget');
+  assert.equal(Boolean(cdpCall), true);
+});
+
+test('service worker returns window.bounds.error when target tab is unavailable', async () => {
+  const harness = makeHarness();
+  await importServiceWorkerFresh();
+  globalThis.chrome.tabs.query = async () => [];
+  globalThis.chrome.tabs.get = async () => {
+    throw new Error('no_such_tab');
+  };
+  const listener = findBleCommandListener(harness.runtimeListeners);
+  await callBleCommand(listener, {
+    type: 'window.bounds.request',
+    request_id: 'wb-err'
+  });
+
+  const payload = harness.postedPayloads.find((entry) => entry?.request_id === 'wb-err');
+  assert.equal(payload?.type, 'window.bounds.error');
+  assert.equal(payload?.error, 'active_tab_not_found');
 });
 
 test('service worker dispatches dom snapshot requests and ignores unknown commands', async () => {

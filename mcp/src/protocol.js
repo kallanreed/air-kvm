@@ -100,6 +100,14 @@ export function validateAgentCommand(msg) {
       return { ok: true };
     case 'tabs.list.request':
       return { ok: true };
+    case 'window.bounds.request':
+      if (typeof msg.request_id !== 'string' || msg.request_id.length === 0) {
+        return { ok: false, error: 'invalid_window_bounds_request' };
+      }
+      if (typeof msg.tab_id !== 'undefined' && !Number.isInteger(msg.tab_id)) {
+        return { ok: false, error: 'invalid_window_bounds_request' };
+      }
+      return { ok: true };
     case 'transfer.reset':
       return { ok: true };
     case 'transfer.cancel':

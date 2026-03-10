@@ -86,17 +86,20 @@ bool CommandRouter::HandleCommand(const airkvm::Command& cmd, const char* source
       return true;
     case airkvm::CommandType::kDomSnapshotRequest:
     case airkvm::CommandType::kTabsListRequest:
+    case airkvm::CommandType::kWindowBoundsRequest:
     case airkvm::CommandType::kTabOpenRequest:
     case airkvm::CommandType::kJsExecRequest:
     case airkvm::CommandType::kScreenshotRequest:
     case airkvm::CommandType::kDomSnapshot:
     case airkvm::CommandType::kTabsList:
+    case airkvm::CommandType::kWindowBounds:
     case airkvm::CommandType::kTabOpen:
     case airkvm::CommandType::kTabOpenError:
     case airkvm::CommandType::kJsExecResult:
     case airkvm::CommandType::kJsExecError:
     case airkvm::CommandType::kTabsListError:
     case airkvm::CommandType::kDomSnapshotError:
+    case airkvm::CommandType::kWindowBoundsError:
     case airkvm::CommandType::kScreenshotMeta:
     case airkvm::CommandType::kScreenshotChunk:
     case airkvm::CommandType::kScreenshotError:

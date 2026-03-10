@@ -24,6 +24,7 @@ test('buildCommandForTool maps screenshot tools to screenshot.request with bin e
     desktop_delay_ms: 600
   });
   const tabs = buildCommandForTool('airkvm_list_tabs', { request_id: 't1' });
+  const windowBounds = buildCommandForTool('airkvm_window_bounds', { request_id: 'wb-1', tab_id: 9 });
   const openTab = buildCommandForTool('airkvm_open_tab', {
     request_id: 'tab-1',
     url: 'https://example.com/path',
@@ -57,6 +58,7 @@ test('buildCommandForTool maps screenshot tools to screenshot.request with bin e
     encoding: 'bin'
   });
   assert.deepEqual(tabs, { type: 'tabs.list.request', request_id: 't1' });
+  assert.deepEqual(windowBounds, { type: 'window.bounds.request', request_id: 'wb-1', tab_id: 9 });
   assert.deepEqual(openTab, {
     type: 'tab.open.request',
     request_id: 'tab-1',
@@ -77,11 +79,13 @@ test('isKnownTool and isStructuredTool classify tools correctly', () => {
   assert.equal(isKnownTool('airkvm_send'), true);
   assert.equal(isKnownTool('airkvm_dom_snapshot'), true);
   assert.equal(isKnownTool('airkvm_list_tabs'), true);
+  assert.equal(isKnownTool('airkvm_window_bounds'), true);
   assert.equal(isKnownTool('airkvm_open_tab'), true);
   assert.equal(isKnownTool('airkvm_exec_js_tab'), true);
   assert.equal(isKnownTool('nope'), false);
   assert.equal(isStructuredTool('airkvm_send'), false);
   assert.equal(isStructuredTool('airkvm_list_tabs'), true);
+  assert.equal(isStructuredTool('airkvm_window_bounds'), true);
   assert.equal(isStructuredTool('airkvm_open_tab'), true);
   assert.equal(isStructuredTool('airkvm_exec_js_tab'), true);
   assert.equal(isStructuredTool('airkvm_screenshot_tab'), true);
@@ -169,6 +173,35 @@ test('tabs list collector returns structured list payload', () => {
   assert.equal(done.ok, true);
   assert.equal(done.data.request_id, 'tabs-1');
   assert.equal(done.data.tabs.length, 1);
+});
+
+test('window bounds collector returns structured success payload', () => {
+  const command = { type: 'window.bounds.request', request_id: 'wb-1', tab_id: 4 };
+  const collect = createResponseCollector('airkvm_window_bounds', command);
+  const done = collect({
+    type: 'window.bounds',
+    request_id: 'wb-1',
+    tab_id: 4,
+    window_id: 7,
+    bounds: { left: 100, top: 40, width: 1200, height: 900, window_state: 'normal' }
+  });
+  assert.equal(done.done, true);
+  assert.equal(done.ok, true);
+  assert.equal(done.data.window_id, 7);
+  assert.equal(done.data.bounds.left, 100);
+});
+
+test('window bounds collector returns structured error payload', () => {
+  const command = { type: 'window.bounds.request', request_id: 'wb-2' };
+  const collect = createResponseCollector('airkvm_window_bounds', command);
+  const done = collect({
+    type: 'window.bounds.error',
+    request_id: 'wb-2',
+    error: 'active_tab_not_found'
+  });
+  assert.equal(done.done, true);
+  assert.equal(done.ok, false);
+  assert.equal(done.data.error, 'active_tab_not_found');
 });
 
 test('dom snapshot collector returns structured success payload', () => {
