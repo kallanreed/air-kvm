@@ -28,21 +28,24 @@ Maintain a reliable remote-control and browser-automation stack where:
   - `airkvm_screenshot_tab`
   - `airkvm_screenshot_desktop`
 - UART parser supports mixed framed stream (`ctrl`, `log`, `bin`, and `bin_error`).
-- Screenshot/DOM/JS-exec collectors use a hand-wired transfer state machine with 10+ message types (`transfer.meta`, `transfer.done`, `transfer.ack`, `transfer.nack`, `transfer.resume`, `transfer.cancel`, `transfer.reset`, etc.).
+- `streamRequest()` on UartTransport transparently handles chunked responses via StreamReceiver.
+- DOM snapshot and screenshot tools route through the stream layer; old collector path remains as fallback.
+- JS-exec script upload still uses legacy transfer protocol (transfer.meta/done/ack).
 
 ### Extension
 - BLE bridge page is the primary BLE runtime path.
-- Service worker handles all browser automation commands and transfer session controls.
+- Service worker handles all browser automation commands.
+- DOM snapshot and screenshot responses sent via StreamSender (chunked binary with firmware-gated acks).
 - Screenshot path includes capture timeout/stage timeout guards and JPEG downscale/compression logic.
 - Default logging is low-noise; verbose mode is toggleable in bridge UI.
+- Old outbound transfer machinery (pumpTransferSession, screenshotTransfers) removed.
+- Inbound script transfer protocol retained for js.exec upload.
 
 ## Known Issues
 
-1. **Silent truncation of large commands.** `kMaxBleControlBufferLen = 4096` in firmware drops any BLE control JSON exceeding 4KB. A `js.exec.request` with a long script (schema allows up to 12KB) hits this limit and is silently discarded.
+1. **Silent truncation of large commands.** `kMaxBleControlBufferLen = 4096` in firmware drops any BLE control JSON exceeding 4KB. The stream layer mitigates this for DOM/screenshot responses. JS-exec script upload still vulnerable if scripts exceed buffer limit.
 
-2. **Transfer protocol complexity.** The current 10+ message transfer protocol pushes chunking/flow-control into the application layer, forcing every tool to manually wire up a session state machine. This is duplicated across three collectors in MCP and multiple handlers in the extension.
-
-3. **Code duplication.** `sendCommand`/`waitForFrame` in `uart.js` share ~70% identical code. `postEvent`/`postBinary` in `bridge.js` are ~90% telemetry boilerplate. `binary_frame.js` exists in both MCP and extension with divergent max payload limits (4096 vs 1024) that are undocumented.
+2. **Code duplication.** `sendCommand`/`waitForFrame` in `uart.js` share ~70% identical code. `postEvent`/`postBinary` in `bridge.js` are ~90% telemetry boilerplate. `binary_frame.js` exists in both MCP and extension with divergent max payload limits (4096 vs 1024) that are undocumented.
 
 ---
 
@@ -147,31 +150,43 @@ Implemented: `mcp/src/stream.js`, `extension/src/stream.js` with full test cover
 - Small messages (<= chunkSize) go inline as control frames, no chunking overhead
 - Duplicate chunks during a transfer are idempotent (re-ack, don't double-append)
 - `stream.reset` clears all state
-- Extension variant uses `Uint8Array` + separate `writeJsonFn`/`writeBinaryFn`; MCP variant uses `Buffer` + single `writeFn`
+- Extension variant uses `Uint8Array` + separate `writeJsonFn`/`writeBinaryFn`; MCP variant uses `Buffer` + same API
 
-#### Phase 2 — Firmware stream awareness
+#### Phase 2 — Firmware stream awareness ✅
 
-Firmware becomes minimally stream-aware:
-- Recognizes chunk frames (already does via AK magic).
-- When bridging UART→BLE: holds off acking UART until BLE write completes (or nack if BLE down).
-- When bridging BLE→UART: emits chunk on UART, acks BLE immediately (UART is reliable/wired).
-- On `stream.reset`: clears any pending bridge state.
+Implemented in `firmware/include/protocol.hpp`, `firmware/src/protocol.cpp`, `firmware/src/command_router.cpp`, `firmware/src/app.cpp`.
 
-No reassembly in firmware. No payload inspection. Just chunk-level gate.
+- Added `kStreamAck`, `kStreamNack`, `kStreamReset` command types with parser support.
+- Stream control messages pass through command router like other bridge types.
+- In `ProcessBleWrite()`: after forwarding BLE binary chunk to UART, extracts transfer_id+seq from AK frame bytes and sends `stream.ack` JSON back on BLE.
+- No reassembly in firmware. No payload inspection. Just chunk-level gate.
+- ⚠️ Not yet build-verified on ESP32 (no C++ toolchain available on Windows).
 
-#### Phase 3 — Migrate app code to stream layer
+#### Phase 3 — Migrate app code to stream layer ✅
 
-- MCP `tooling.js`: replace `createResponseCollector` state machines with `stream.send()` / `stream.onMessage()`.
-- Extension `service_worker.js`: replace `pumpTransferSession`, all `handleTransfer*` functions, chunking logic in `sendDomSnapshot`/`sendScreenshot` with `stream.send()`.
-- Remove `screenshotTransfers` Map, `inboundScriptTransfers` Map, all session lifecycle machinery.
+Implemented in `mcp/src/server.js`, `mcp/src/uart.js`, `extension/src/service_worker.js`.
 
-#### Phase 4 — Cleanup
+- MCP: `uart.js` adds `streamRequest()` method with `StreamReceiver` wired into frame routing.
+- MCP: `server.js` routes dom_snapshot and screenshot tools through `streamRequest()` with backward-compatible fallback to old collectors when `streamRequest` is absent.
+- Extension: `sendDomSnapshot` → `sender.send(snapshotPayload)` (replaces manual chunking).
+- Extension: `sendScreenshot` → `sender.send(screenshotResponse)` (replaces transfer sessions).
+- Extension: `stream.ack/nack/reset` handlers added to `kBleCommandHandlers`.
+- JS-exec script upload NOT migrated (still uses legacy transfer protocol).
 
-- Remove dead `transfer.*` types from `firmware/include/protocol.hpp`, `firmware/src/protocol.cpp`, `command_router.cpp`, `mcp/src/protocol.js`.
-- Update `docs/protocol.md` and `docs/architecture.md`.
+#### Phase 4 — Cleanup ✅ (partial)
+
+Done:
+- Removed ~286 lines of dead outbound transfer code from extension (`pumpTransferSession`, `screenshotTransfers`, `handleTransferAck/DoneAck/Resume/Nack/Cancel`, `screenshotInFlight`, unused imports).
+- Updated plan.md with completion status.
+
+Remaining (lower priority):
+- Migrate js.exec script upload to stream layer (currently uses inbound transfer protocol).
+- Remove dead `transfer.*` types from firmware once inbound transfer is also migrated.
+- Remove old MCP collectors for dom_snapshot/screenshot (still exercised by backward-compat tests).
 - Deduplicate `sendCommand`/`waitForFrame` in `uart.js`.
 - Extract `bleWriteBytes` helper in `bridge.js`.
 - Document `binary_frame.js` payload limit divergence (extension 1024 vs MCP 4096).
+- Update `docs/protocol.md` and `docs/architecture.md`.
 
 #### Phase dependencies
 
