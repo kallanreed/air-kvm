@@ -1,5 +1,7 @@
 #include "hid_controller.hpp"
 
+#include <cstdlib>
+
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
 
@@ -31,10 +33,10 @@ const uint8_t kHidReportMap[] = {
     0x95, 0x06,        //   Report Count (6)
     0x75, 0x08,        //   Report Size (8)
     0x15, 0x00,        //   Logical Minimum (0)
-    0x25, 0x65,        //   Logical Maximum (101)
+    0x25, 0xE7,        //   Logical Maximum (231)
     0x05, 0x07,        //   Usage Page (Keyboard/Keypad)
     0x19, 0x00,        //   Usage Minimum (Reserved)
-    0x29, 0x65,        //   Usage Maximum (Keyboard Application)
+    0x29, 0xE7,        //   Usage Maximum (Keyboard Right GUI)
     0x81, 0x00,        //   Input (Data,Array,Abs)
     0xC0,              // End Collection
 
@@ -71,6 +73,354 @@ const uint8_t kHidReportMap[] = {
 constexpr uint8_t kKeyboardReportId = 1;
 constexpr uint8_t kMouseReportId = 2;
 constexpr int kMaxMouseMoveSteps = 512;
+
+struct KeyAlias {
+  const char* name;
+  uint8_t modifier;
+  uint8_t keycode;
+};
+
+constexpr KeyAlias kNamedKeyAliases[] = {
+    // Modifiers
+    {"Shift", 0x02, 0x00},
+    {"ShiftLeft", 0x02, 0x00},
+    {"ShiftRight", 0x20, 0x00},
+    {"Control", 0x01, 0x00},
+    {"Ctrl", 0x01, 0x00},
+    {"ControlLeft", 0x01, 0x00},
+    {"ControlRight", 0x10, 0x00},
+    {"Alt", 0x04, 0x00},
+    {"AltLeft", 0x04, 0x00},
+    {"Option", 0x04, 0x00},
+    {"OptionLeft", 0x04, 0x00},
+    {"AltRight", 0x40, 0x00},
+    {"OptionRight", 0x40, 0x00},
+    {"Meta", 0x08, 0x00},
+    {"Command", 0x08, 0x00},
+    {"MetaLeft", 0x08, 0x00},
+    {"CommandLeft", 0x08, 0x00},
+    {"MetaRight", 0x80, 0x00},
+    {"CommandRight", 0x80, 0x00},
+
+    // Editing/navigation keys.
+    {"Enter", 0x00, 0x28},
+    {"Return", 0x00, 0x28},
+    {"NumpadEnter", 0x00, 0x58},
+    {"Tab", 0x00, 0x2B},
+    {"Escape", 0x00, 0x29},
+    {"Esc", 0x00, 0x29},
+    {"Backspace", 0x00, 0x2A},
+    {"Delete", 0x00, 0x4C},
+    {"Del", 0x00, 0x4C},
+    {"Insert", 0x00, 0x49},
+    {"Home", 0x00, 0x4A},
+    {"End", 0x00, 0x4D},
+    {"PageUp", 0x00, 0x4B},
+    {"PageDown", 0x00, 0x4E},
+    {"ArrowRight", 0x00, 0x4F},
+    {"ArrowLeft", 0x00, 0x50},
+    {"ArrowDown", 0x00, 0x51},
+    {"ArrowUp", 0x00, 0x52},
+    {"CapsLock", 0x00, 0x39},
+    {"NumLock", 0x00, 0x53},
+    {"ScrollLock", 0x00, 0x47},
+    {"PrintScreen", 0x00, 0x46},
+    {"Pause", 0x00, 0x48},
+    {"ContextMenu", 0x00, 0x65},
+    {"Application", 0x00, 0x65},
+    {"Menu", 0x00, 0x76},
+
+    // Web KeyboardEvent.code symbols and punctuation keys.
+    {"Backquote", 0x00, 0x35},
+    {"Minus", 0x00, 0x2D},
+    {"Equal", 0x00, 0x2E},
+    {"BracketLeft", 0x00, 0x2F},
+    {"BracketRight", 0x00, 0x30},
+    {"Backslash", 0x00, 0x31},
+    {"IntlBackslash", 0x00, 0x64},
+    {"Semicolon", 0x00, 0x33},
+    {"Quote", 0x00, 0x34},
+    {"Comma", 0x00, 0x36},
+    {"Period", 0x00, 0x37},
+    {"Slash", 0x00, 0x38},
+    {"Space", 0x00, 0x2C},
+    {"Spacebar", 0x00, 0x2C},
+
+    // Numpad aliases.
+    {"NumpadAdd", 0x00, 0x57},
+    {"NumpadSubtract", 0x00, 0x56},
+    {"NumpadMultiply", 0x00, 0x55},
+    {"NumpadDivide", 0x00, 0x54},
+    {"NumpadDecimal", 0x00, 0x63},
+    {"NumpadComma", 0x00, 0x85},
+    {"NumpadEqual", 0x00, 0x67},
+    {"NumpadParenLeft", 0x00, 0xB6},
+    {"NumpadParenRight", 0x00, 0xB7},
+
+    // Consumer/system-ish keys present in keyboard page usage table.
+    {"Mute", 0x00, 0x7F},
+    {"VolumeMute", 0x00, 0x7F},
+    {"VolumeUp", 0x00, 0x80},
+    {"VolumeDown", 0x00, 0x81},
+    {"Help", 0x00, 0x75},
+    {"Stop", 0x00, 0x78},
+    {"Again", 0x00, 0x79},
+    {"Undo", 0x00, 0x7A},
+    {"Cut", 0x00, 0x7B},
+    {"Copy", 0x00, 0x7C},
+    {"Paste", 0x00, 0x7D},
+    {"Find", 0x00, 0x7E},
+};
+
+bool ResolveAsciiChar(char c, uint8_t* modifier, uint8_t* keycode) {
+  if (modifier == nullptr || keycode == nullptr) {
+    return false;
+  }
+  if (c >= 'a' && c <= 'z') {
+    *modifier = 0x00;
+    *keycode = static_cast<uint8_t>(0x04 + (c - 'a'));
+    return true;
+  }
+  if (c >= 'A' && c <= 'Z') {
+    *modifier = 0x02;
+    *keycode = static_cast<uint8_t>(0x04 + (c - 'A'));
+    return true;
+  }
+  if (c >= '1' && c <= '9') {
+    *modifier = 0x00;
+    *keycode = static_cast<uint8_t>(0x1E + (c - '1'));
+    return true;
+  }
+  switch (c) {
+    case '0':
+      *modifier = 0x00;
+      *keycode = 0x27;
+      return true;
+    case ' ':
+      *modifier = 0x00;
+      *keycode = 0x2C;
+      return true;
+    case '\n':
+    case '\r':
+      *modifier = 0x00;
+      *keycode = 0x28;
+      return true;
+    case '\t':
+      *modifier = 0x00;
+      *keycode = 0x2B;
+      return true;
+    case '\b':
+      *modifier = 0x00;
+      *keycode = 0x2A;
+      return true;
+    case '-':
+      *modifier = 0x00;
+      *keycode = 0x2D;
+      return true;
+    case '_':
+      *modifier = 0x02;
+      *keycode = 0x2D;
+      return true;
+    case '=':
+      *modifier = 0x00;
+      *keycode = 0x2E;
+      return true;
+    case '+':
+      *modifier = 0x02;
+      *keycode = 0x2E;
+      return true;
+    case '[':
+      *modifier = 0x00;
+      *keycode = 0x2F;
+      return true;
+    case '{':
+      *modifier = 0x02;
+      *keycode = 0x2F;
+      return true;
+    case ']':
+      *modifier = 0x00;
+      *keycode = 0x30;
+      return true;
+    case '}':
+      *modifier = 0x02;
+      *keycode = 0x30;
+      return true;
+    case '\\':
+      *modifier = 0x00;
+      *keycode = 0x31;
+      return true;
+    case '|':
+      *modifier = 0x02;
+      *keycode = 0x31;
+      return true;
+    case ';':
+      *modifier = 0x00;
+      *keycode = 0x33;
+      return true;
+    case ':':
+      *modifier = 0x02;
+      *keycode = 0x33;
+      return true;
+    case '\'':
+      *modifier = 0x00;
+      *keycode = 0x34;
+      return true;
+    case '"':
+      *modifier = 0x02;
+      *keycode = 0x34;
+      return true;
+    case '`':
+      *modifier = 0x00;
+      *keycode = 0x35;
+      return true;
+    case '~':
+      *modifier = 0x02;
+      *keycode = 0x35;
+      return true;
+    case ',':
+      *modifier = 0x00;
+      *keycode = 0x36;
+      return true;
+    case '<':
+      *modifier = 0x02;
+      *keycode = 0x36;
+      return true;
+    case '.':
+      *modifier = 0x00;
+      *keycode = 0x37;
+      return true;
+    case '>':
+      *modifier = 0x02;
+      *keycode = 0x37;
+      return true;
+    case '/':
+      *modifier = 0x00;
+      *keycode = 0x38;
+      return true;
+    case '?':
+      *modifier = 0x02;
+      *keycode = 0x38;
+      return true;
+    case '!':
+      *modifier = 0x02;
+      *keycode = 0x1E;
+      return true;
+    case '@':
+      *modifier = 0x02;
+      *keycode = 0x1F;
+      return true;
+    case '#':
+      *modifier = 0x02;
+      *keycode = 0x20;
+      return true;
+    case '$':
+      *modifier = 0x02;
+      *keycode = 0x21;
+      return true;
+    case '%':
+      *modifier = 0x02;
+      *keycode = 0x22;
+      return true;
+    case '^':
+      *modifier = 0x02;
+      *keycode = 0x23;
+      return true;
+    case '&':
+      *modifier = 0x02;
+      *keycode = 0x24;
+      return true;
+    case '*':
+      *modifier = 0x02;
+      *keycode = 0x25;
+      return true;
+    case '(':
+      *modifier = 0x02;
+      *keycode = 0x26;
+      return true;
+    case ')':
+      *modifier = 0x02;
+      *keycode = 0x27;
+      return true;
+    default:
+      break;
+  }
+  return false;
+}
+
+bool ResolveDynamicCode(const String& key, uint8_t* modifier, uint8_t* keycode) {
+  if (modifier == nullptr || keycode == nullptr) {
+    return false;
+  }
+  if (key.length() == 4 && key.startsWith("Key")) {
+    const char c = key[3];
+    if (c >= 'A' && c <= 'Z') {
+      *modifier = 0x00;
+      *keycode = static_cast<uint8_t>(0x04 + (c - 'A'));
+      return true;
+    }
+  }
+  if (key.length() == 6 && key.startsWith("Digit")) {
+    return ResolveAsciiChar(key[5], modifier, keycode);
+  }
+  if (key.length() == 7 && key.startsWith("Numpad")) {
+    const char c = key[6];
+    if (c >= '1' && c <= '9') {
+      *modifier = 0x00;
+      *keycode = static_cast<uint8_t>(0x59 + (c - '1'));
+      return true;
+    }
+    if (c == '0') {
+      *modifier = 0x00;
+      *keycode = 0x62;
+      return true;
+    }
+  }
+  if (key.length() >= 2 && (key[0] == 'F' || key[0] == 'f')) {
+    const int fn = key.substring(1).toInt();
+    if (fn >= 1 && fn <= 12) {
+      *modifier = 0x00;
+      *keycode = static_cast<uint8_t>(0x3A + (fn - 1));
+      return true;
+    }
+    if (fn >= 13 && fn <= 24) {
+      *modifier = 0x00;
+      *keycode = static_cast<uint8_t>(0x68 + (fn - 13));
+      return true;
+    }
+  }
+  return false;
+}
+
+bool ResolveRawHidUsage(const String& key, uint8_t* modifier, uint8_t* keycode) {
+  if (modifier == nullptr || keycode == nullptr) {
+    return false;
+  }
+  if (!key.startsWith("HID:") && !key.startsWith("hid:")) {
+    return false;
+  }
+  const String raw = key.substring(4);
+  if (raw.length() == 0) {
+    return false;
+  }
+
+  char* end = nullptr;
+  const int base = raw.startsWith("0x") || raw.startsWith("0X") ? 16 : 10;
+  const long parsed = strtol(raw.c_str(), &end, base);
+  if (end == raw.c_str() || *end != '\0' || parsed < 0 || parsed > 0xE7) {
+    return false;
+  }
+
+  const uint8_t usage = static_cast<uint8_t>(parsed);
+  if (usage >= 0xE0 && usage <= 0xE7) {
+    *modifier = static_cast<uint8_t>(1u << (usage - 0xE0));
+    *keycode = 0x00;
+    return true;
+  }
+
+  *modifier = 0x00;
+  *keycode = usage;
+  return true;
+}
 }  // namespace
 
 namespace airkvm::fw {
@@ -209,78 +559,21 @@ bool HidController::ResolveKeyTap(const String& key, uint8_t* modifier, uint8_t*
   *modifier = 0;
   *keycode = 0;
 
-  if (key == "Shift" || key == "ShiftLeft") {
-    *modifier = 0x02;
+  for (const auto& alias : kNamedKeyAliases) {
+    if (key == alias.name) {
+      *modifier = alias.modifier;
+      *keycode = alias.keycode;
+      return true;
+    }
+  }
+  if (ResolveRawHidUsage(key, modifier, keycode)) {
     return true;
   }
-  if (key == "ShiftRight") {
-    *modifier = 0x20;
-    return true;
-  }
-  if (key == "Control" || key == "Ctrl" || key == "ControlLeft") {
-    *modifier = 0x01;
-    return true;
-  }
-  if (key == "ControlRight") {
-    *modifier = 0x10;
-    return true;
-  }
-  if (key == "Alt" || key == "AltLeft" || key == "Option") {
-    *modifier = 0x04;
-    return true;
-  }
-  if (key == "AltRight" || key == "OptionRight") {
-    *modifier = 0x40;
-    return true;
-  }
-  if (key == "Meta" || key == "Command" || key == "MetaLeft" || key == "CommandLeft") {
-    *modifier = 0x08;
-    return true;
-  }
-  if (key == "MetaRight" || key == "CommandRight") {
-    *modifier = 0x80;
-    return true;
-  }
-
-  if (key == "Enter") {
-    *keycode = 0x28;
-    return true;
-  }
-  if (key == "Tab") {
-    *keycode = 0x2B;
-    return true;
-  }
-  if (key == "Escape") {
-    *keycode = 0x29;
-    return true;
-  }
-  if (key == "Space") {
-    *keycode = 0x2C;
+  if (ResolveDynamicCode(key, modifier, keycode)) {
     return true;
   }
   if (key.length() == 1) {
-    const char c = key[0];
-    if (c >= 'a' && c <= 'z') {
-      *keycode = static_cast<uint8_t>(0x04 + (c - 'a'));
-      return true;
-    }
-    if (c >= 'A' && c <= 'Z') {
-      *keycode = static_cast<uint8_t>(0x04 + (c - 'A'));
-      *modifier = 0x02;
-      return true;
-    }
-    if (c >= '1' && c <= '9') {
-      *keycode = static_cast<uint8_t>(0x1E + (c - '1'));
-      return true;
-    }
-    if (c == '0') {
-      *keycode = 0x27;
-      return true;
-    }
-    if (c == ' ') {
-      *keycode = 0x2C;
-      return true;
-    }
+    return ResolveAsciiChar(key[0], modifier, keycode);
   }
   return false;
 }
