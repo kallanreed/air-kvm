@@ -25,10 +25,9 @@ test('validateAgentCommand rejects key.type with empty text', () => {
   assert.equal(result.error, 'invalid_key_type');
 });
 
-test('validateAgentCommand rejects key.type with unsupported characters', () => {
-  const result = validateAgentCommand({ type: 'key.type', text: 'hello!' });
-  assert.equal(result.ok, false);
-  assert.equal(result.error, 'invalid_key_type');
+test('validateAgentCommand accepts key.type with punctuation', () => {
+  const result = validateAgentCommand({ type: 'key.type', text: 'Hello, World! -- The AirKVM' });
+  assert.equal(result.ok, true);
 });
 
 test('toDeviceLine returns JSONL', () => {
