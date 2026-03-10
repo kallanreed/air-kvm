@@ -1,5 +1,6 @@
 import { dataUrlToMetaAndChunks, resolveScreenshotConfig } from './screenshot_protocol.js';
 import { encodeTransferChunkFrame, makeTransferId } from './binary_frame.js';
+import { StreamSender } from './stream.js';
 const kBleBridgePagePath = 'src/ble_bridge.html';
 const kDebugDefault = false;
 const kDebugStorageKey = 'airkvmVerboseBridgeLog';
@@ -702,6 +703,18 @@ async function postBinaryOrThrow(bytes) {
   }
 }
 
+let streamSender = null;
+function getStreamSender() {
+  if (!streamSender) {
+    streamSender = new StreamSender({
+      writeJsonFn: async (obj) => { await postEventOrThrow(obj); },
+      writeBinaryFn: async (bytes) => { await postBinaryOrThrow(bytes); },
+      chunkSize: 160,
+    });
+  }
+  return streamSender;
+}
+
 async function pumpTransferSession(session) {
   if (!session) return;
   if (session.sending) {
@@ -963,56 +976,8 @@ async function sendDomSnapshot(command) {
     throw new Error('dom_snapshot_too_large');
   }
 
-  pruneScreenshotTransfers();
-  const transferIdMeta = makeTransferId();
-  const transferId = transferIdMeta.string;
-  const transferIdNumeric = transferIdMeta.numeric;
-  const chunkSize = 160;
-  const totalChunks = Math.ceil(snapshotBytes.length / chunkSize);
-  const framesBySeq = new Map();
-  for (let seq = 0; seq < totalChunks; seq += 1) {
-    const start = seq * chunkSize;
-    const end = Math.min(snapshotBytes.length, start + chunkSize);
-    const payloadBytes = snapshotBytes.slice(start, end);
-    framesBySeq.set(
-      seq,
-      encodeTransferChunkFrame({
-        transferIdNumeric,
-        seq,
-        payloadBytes
-      })
-    );
-  }
-  const session = {
-    transferId,
-    transferIdNumeric,
-    requestId,
-    source: 'dom',
-    meta: null,
-    framesBySeq,
-    totalChunks,
-    updatedAt: Date.now(),
-    highestAckSeq: -1,
-    nextSeqToSend: 0,
-    doneSent: false,
-    sending: false,
-    pumpRequested: false
-  };
-  screenshotTransfers.set(transferId, session);
-  await postEventOrThrow({
-    type: 'transfer.meta',
-    request_id: requestId,
-    transfer_id: transferId,
-    source: 'dom',
-    mime: 'application/json',
-    encoding: 'bin',
-    chunk_size: chunkSize,
-    total_chunks: totalChunks,
-    total_bytes: snapshotBytes.length,
-    tab_id: tab.id,
-    ts: Date.now()
-  }, 'dom_snapshot_meta_send_failed');
-  await pumpTransferSession(session);
+  const sender = getStreamSender();
+  await sender.send(snapshotPayload);
 }
 
 async function sendScreenshot(command) {
@@ -1048,73 +1013,29 @@ async function sendScreenshot(command) {
       encodedHeight: encoded.encodedHeight,
       encodedQuality: encoded.encodedQuality
     });
-    const transferIdMeta = makeTransferId();
-    const { meta, chunks } = dataUrlToMetaAndChunks(
-      encoded.dataUrl,
-      requestId,
-      source,
-      transferIdMeta.string,
-      encoded,
-      160
-    );
-    debugLog('sendScreenshot encoded', {
-      source,
-      requestId,
-      encoding: meta.encoding,
-      chunks: chunks.length,
-      totalBytes: meta.total_bytes
-    });
-    pruneScreenshotTransfers();
-    const transferId = transferIdMeta.string;
-    const transferIdNumeric = transferIdMeta.numeric;
-    const framesBySeq = new Map();
-    for (const chunk of chunks) {
-      framesBySeq.set(
-        chunk.seq,
-        encodeTransferChunkFrame({
-          transferIdNumeric,
-          seq: chunk.seq,
-          payloadBytes: chunk.bytes
-        })
-      );
-    }
-    const session = {
-      transferId,
-      transferIdNumeric,
-      requestId,
-      source,
-      meta,
-      framesBySeq,
-      totalChunks: chunks.length,
-      updatedAt: Date.now(),
-      highestAckSeq: -1,
-      nextSeqToSend: 0,
-      doneSent: false,
-      sending: false,
-      pumpRequested: false
-    };
-    screenshotTransfers.set(transferId, session);
-    debugLog('transfer session created', {
-      requestId,
-      transferId,
-      totalChunks: chunks.length
-    });
-    void writeSwBreadcrumb('transfer_created', {
-      request_id: requestId,
-      transfer_id: transferId,
-      total_chunks: chunks.length
-    });
 
-    await postEventOrThrow({
-      type: 'transfer.meta',
-      ...meta
-    }, 'transfer_meta_send_failed');
-    debugLog('transfer window start', {
-      requestId,
-      transferId,
-      window: kTransferAckWindow
+    const comma = encoded.dataUrl.indexOf(',');
+    if (comma === -1) throw new Error('screenshot_invalid_data_url');
+    const header = encoded.dataUrl.slice(0, comma);
+    const base64Data = encoded.dataUrl.slice(comma + 1);
+    const mimeMatch = /^data:([^;]+);base64$/i.exec(header);
+    const mime = mimeMatch?.[1] || 'image/jpeg';
+
+    const sender = getStreamSender();
+    await sender.send({
+      type: 'screenshot.response',
+      request_id: requestId,
+      source,
+      mime,
+      data: base64Data,
+      encoded_width: encoded.encodedWidth,
+      encoded_height: encoded.encodedHeight,
+      source_width: encoded.sourceWidth,
+      source_height: encoded.sourceHeight,
+      encoded_quality: encoded.encodedQuality,
+      encode_attempts: encoded.attempts,
+      ts: Date.now(),
     });
-    await pumpTransferSession(session);
   } finally {
     screenshotInFlight = false;
   }
@@ -1262,6 +1183,7 @@ async function handleTransferReset(command) {
   screenshotTransfers.clear();
   inboundScriptTransfers.clear();
   screenshotInFlight = false;
+  if (streamSender) streamSender.reset();
   void writeSwBreadcrumb('transfer_reset', {
     request_id: command?.request_id || null
   });
@@ -1491,6 +1413,9 @@ const kBleCommandHandlers = {
       });
     }
   ),
+  'stream.ack': (command) => { getStreamSender().onAck(command); },
+  'stream.nack': (command) => { getStreamSender().onAck(command); },
+  'stream.reset': (command) => { getStreamSender().reset(); },
   'transfer.resume': (command) => runBridgeHandler(
     command,
     'handleTransferResume',

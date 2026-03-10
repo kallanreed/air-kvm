@@ -362,3 +362,101 @@ test('airkvm_dom_snapshot transport error includes diagnostics frames', async ()
   assert.equal(payload.diagnostics.frames.length, 1);
   assert.equal(payload.diagnostics.recent_frames.length, 1);
 });
+
+// --- Stream-path tests (transport.streamRequest present) ---
+
+function makeStreamHarness(streamRequestImpl) {
+  const sent = [];
+  const transport = {
+    sendCommand: async () => ({ ok: true, msg: { ok: true } }),
+    sendCommandNoWait: async () => ({ ok: true }),
+    streamRequest: streamRequestImpl,
+  };
+  const server = createServer({
+    transport,
+    send: (msg) => sent.push(msg),
+  });
+  return { sent, server };
+}
+
+test('stream: airkvm_dom_snapshot returns structured json via streamRequest', async () => {
+  const { sent, server } = makeStreamHarness(async () => ({
+    ok: true,
+    data: { type: 'dom.snapshot', request_id: 'dom-s1', html: '<h1>hi</h1>', title: 'Test' },
+  }));
+
+  server.handleRequest({
+    jsonrpc: '2.0', id: 100,
+    method: 'tools/call',
+    params: { name: 'airkvm_dom_snapshot', arguments: { request_id: 'dom-s1' } },
+  });
+
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].isError, undefined);
+  const payload = JSON.parse(sent[0].result.content[0].text);
+  assert.equal(payload.request_id, 'dom-s1');
+  assert.equal(payload.snapshot.html, '<h1>hi</h1>');
+});
+
+test('stream: airkvm_dom_snapshot error response via streamRequest', async () => {
+  const { sent, server } = makeStreamHarness(async () => ({
+    ok: true,
+    data: { type: 'dom.snapshot.error', ok: false, request_id: 'dom-s2', error: 'no_tab' },
+  }));
+
+  server.handleRequest({
+    jsonrpc: '2.0', id: 101,
+    method: 'tools/call',
+    params: { name: 'airkvm_dom_snapshot', arguments: { request_id: 'dom-s2' } },
+  });
+
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(sent[0].isError, true);
+  const payload = JSON.parse(sent[0].result.content[0].text);
+  assert.equal(payload.error, 'no_tab');
+});
+
+test('stream: airkvm_screenshot_tab returns base64 via streamRequest', async () => {
+  const { sent, server } = makeStreamHarness(async () => ({
+    ok: true,
+    data: {
+      type: 'screenshot.response', request_id: 'shot-s1', source: 'tab',
+      data: '/9j/fakebase64', mime: 'image/jpeg',
+    },
+  }));
+
+  server.handleRequest({
+    jsonrpc: '2.0', id: 102,
+    method: 'tools/call',
+    params: {
+      name: 'airkvm_screenshot_tab',
+      arguments: { request_id: 'shot-s1', max_width: 800, max_height: 600, quality: 0.5 },
+    },
+  });
+
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(sent[0].isError, undefined);
+  const payload = JSON.parse(sent[0].result.content[0].text);
+  assert.equal(payload.request_id, 'shot-s1');
+  assert.equal(payload.mime, 'image/jpeg');
+  assert.equal(payload.base64, '/9j/fakebase64');
+});
+
+test('stream: streamRequest timeout surfaces as transport_error', async () => {
+  const { sent, server } = makeStreamHarness(async () => {
+    throw new Error('device_timeout');
+  });
+
+  server.handleRequest({
+    jsonrpc: '2.0', id: 103,
+    method: 'tools/call',
+    params: { name: 'airkvm_dom_snapshot', arguments: { request_id: 'dom-s3' } },
+  });
+
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(sent[0].isError, true);
+  const payload = JSON.parse(sent[0].result.content[0].text);
+  assert.equal(payload.error, 'transport_error');
+  assert.equal(payload.detail, 'device_timeout');
+});

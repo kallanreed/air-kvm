@@ -320,8 +320,36 @@ export function createServer({ transport, send }) {
     }
 
     const line = toDeviceLine(command).trim();
-    const responseCollector = createResponseCollector(name, command);
+    const useStream = (
+      name === 'airkvm_dom_snapshot' ||
+      name === 'airkvm_screenshot_tab' ||
+      name === 'airkvm_screenshot_desktop'
+    ) && typeof transport.streamRequest === 'function';
+
     const runTransport = (() => {
+      if (useStream) {
+        const timeoutMs = name === 'airkvm_dom_snapshot' ? 60000 : 30000;
+        return transport.streamRequest(command, { timeoutMs }).then((result) => {
+          const msg = result.data;
+          if (!msg || msg.ok === false || msg.type === 'dom.snapshot.error' || msg.type === 'screenshot.error') {
+            return { ok: false, data: { request_id: command.request_id, error: msg?.error || 'device_error', detail: msg } };
+          }
+          if (name === 'airkvm_dom_snapshot') {
+            return { ok: true, data: { request_id: command.request_id, snapshot: msg } };
+          }
+          // Screenshot — normalize the response shape for maybePersistScreenshot.
+          return {
+            ok: true,
+            data: {
+              request_id: command.request_id,
+              source: msg.source || command.source,
+              mime: msg.mime || 'image/jpeg',
+              base64: msg.data || msg.base64 || '',
+            },
+          };
+        });
+      }
+      const responseCollector = createResponseCollector(name, command);
       if (name !== 'airkvm_exec_js_tab') {
         return transport.sendCommand(command, responseCollector);
       }

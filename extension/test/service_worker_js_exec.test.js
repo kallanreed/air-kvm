@@ -35,6 +35,8 @@ function makeHarness() {
   let blePostOk = true;
   let blePostBinaryOk = true;
   let cdpWindowMethodMissing = false;
+  let autoAckStreamFrames = true;
+  let bleCommandListenerRef = null;
   let getWindowImpl = async (windowId) => ({
     id: windowId,
     left: 130,
@@ -90,6 +92,20 @@ function makeHarness() {
         }
         if (msg?.type === 'ble.postBinary') {
           postedBinary.push(msg.bytes);
+          if (blePostBinaryOk && autoAckStreamFrames && bleCommandListenerRef) {
+            const rawBytes = Uint8Array.from(msg.bytes || []);
+            if (rawBytes.length >= 18 && rawBytes[0] === 0x41 && rawBytes[1] === 0x4B) {
+              const dv = new DataView(rawBytes.buffer, rawBytes.byteOffset, rawBytes.byteLength);
+              const tidNum = dv.getUint32(4, true);
+              const rawSeq = dv.getUint32(8, true);
+              const seq = rawSeq & 0x7FFFFFFF;
+              const tid = `tx_${(tidNum >>> 0).toString(16).padStart(8, '0')}`;
+              const ref = bleCommandListenerRef;
+              setTimeout(() => {
+                ref({ type: 'ble.command', command: { type: 'stream.ack', transfer_id: tid, seq } }, kTrustedSender, () => {});
+              }, 0);
+            }
+          }
           return { ok: blePostBinaryOk };
         }
         if (msg?.type === 'desktop.capture.request') {
@@ -238,6 +254,12 @@ function makeHarness() {
     },
     setGetWindowImpl: (impl) => {
       getWindowImpl = impl;
+    },
+    setBleCommandListener: (listener) => {
+      bleCommandListenerRef = listener;
+    },
+    setAutoAckStreamFrames: (v) => {
+      autoAckStreamFrames = v;
     }
   };
 }
@@ -786,33 +808,32 @@ test('service worker dispatches dom snapshot requests and ignores unknown comman
   const harness = makeHarness();
   await importServiceWorkerFresh();
   const listener = findBleCommandListener(harness.runtimeListeners);
+  harness.setBleCommandListener(listener);
   await callBleCommand(listener, {
     type: 'dom.snapshot.request',
     request_id: 'dom-1'
   });
 
-  const metaPayload = harness.postedPayloads.find((entry) => entry?.type === 'transfer.meta' && entry?.request_id === 'dom-1');
-  assert.equal(Boolean(metaPayload), true);
-  assert.equal(metaPayload?.source, 'dom');
-  assert.equal(metaPayload?.mime, 'application/json');
-  assert.equal(metaPayload?.encoding, 'bin');
-  assert.equal(metaPayload?.total_chunks > 0, true);
-  assert.equal(harness.postedBinary.length, metaPayload.total_chunks);
-  const donePayload = harness.postedPayloads.find((entry) => entry?.type === 'transfer.done' && entry?.request_id === 'dom-1');
-  assert.equal(Boolean(donePayload), true);
-  assert.equal(donePayload?.transfer_id, metaPayload?.transfer_id);
+  // Stream path sends binary frames (payload > 160 bytes chunk threshold).
+  assert.ok(harness.postedBinary.length > 0, 'binary frames sent via stream');
+  // No error should have been posted.
+  const errorPayload = harness.postedPayloads.find((entry) => entry?.type === 'dom.snapshot.error');
+  assert.equal(errorPayload, undefined);
 
   const payloadCountBeforeUnknown = harness.postedPayloads.length;
+  const binaryCountBeforeUnknown = harness.postedBinary.length;
   await callBleCommand(listener, {
     type: 'does.not.exist'
   });
   assert.equal(harness.postedPayloads.length, payloadCountBeforeUnknown);
+  assert.equal(harness.postedBinary.length, binaryCountBeforeUnknown);
 });
 
-test('service worker transfer lifecycle posts meta/chunks/done then clears on done ack', async () => {
+test('service worker sends screenshot via stream and verifies capture', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
   const listener = findBleCommandListener(harness.runtimeListeners);
+  harness.setBleCommandListener(listener);
   await callBleCommand(listener, {
     type: 'screenshot.request',
     request_id: 'shot-1',
@@ -820,86 +841,55 @@ test('service worker transfer lifecycle posts meta/chunks/done then clears on do
     max_chars: 20000
   });
 
-  const metaPayload = harness.postedPayloads.find((entry) => entry?.type === 'transfer.meta' && entry?.request_id === 'shot-1');
-  assert.equal(Boolean(metaPayload), true);
-  assert.equal(String(metaPayload?.transfer_id || '').startsWith('tx_'), true);
-  assert.equal(metaPayload?.encoding, 'bin');
-  assert.equal(metaPayload?.chunk_size, 160);
-  assert.equal(metaPayload?.total_bytes, 5);
-  assert.equal(metaPayload?.total_chunks, 1);
-  assert.equal(metaPayload?.source_width, 64);
-  assert.equal(metaPayload?.source_height, 48);
-  assert.equal(metaPayload?.encoded_width, 64);
-  assert.equal(metaPayload?.encoded_height, 48);
-  assert.equal(metaPayload?.encoded_quality, 0.55);
-  assert.equal(metaPayload?.encode_attempts, 1);
+  // Stream path sends the screenshot.response as binary frames or inline JSON.
+  const inlinePayload = harness.postedPayloads.find((entry) =>
+    entry?.type === 'screenshot.response' && entry?.request_id === 'shot-1'
+  );
+  const hasBinaryFrames = harness.postedBinary.length > 0;
+  assert.ok(inlinePayload || hasBinaryFrames, 'screenshot sent via stream');
   assert.equal(harness.desktopCaptureCalls.length, 1);
-  assert.equal(harness.postedBinary.length, metaPayload.total_chunks);
 
-  const transferIdNumeric = Number.parseInt(metaPayload.transfer_id.slice(3), 16) >>> 0;
-  const firstFrame = parseTransferChunkFrame(harness.postedBinary[0]);
-  assert.equal(firstFrame?.magic0, 0x41);
-  assert.equal(firstFrame?.magic1, 0x4b);
-  assert.equal(firstFrame?.version, 1);
-  assert.equal(firstFrame?.frameType, 1);
-  assert.equal(firstFrame?.transferIdNumeric, transferIdNumeric);
-  assert.equal(firstFrame?.seq, 0);
-  assert.equal(firstFrame?.payloadLength, 5);
-  assert.equal(firstFrame?.totalLength, 23);
+  // If sent inline, verify key fields.
+  if (inlinePayload) {
+    assert.equal(inlinePayload.source, 'desktop');
+    assert.equal(typeof inlinePayload.data, 'string');
+    assert.equal(typeof inlinePayload.mime, 'string');
+    assert.equal(inlinePayload.source_width, 64);
+    assert.equal(inlinePayload.source_height, 48);
+  }
 
-  const donePayload = harness.postedPayloads.find((entry) => entry?.type === 'transfer.done' && entry?.request_id === 'shot-1');
-  assert.equal(donePayload?.transfer_id, metaPayload.transfer_id);
-  assert.equal(donePayload?.total_chunks, metaPayload.total_chunks);
+  // If sent as binary frames, verify AK frame structure.
+  if (hasBinaryFrames) {
+    const firstFrame = parseTransferChunkFrame(harness.postedBinary[0]);
+    assert.equal(firstFrame?.magic0, 0x41);
+    assert.equal(firstFrame?.magic1, 0x4b);
+    assert.equal(firstFrame?.version, 1);
+    assert.equal(firstFrame?.frameType, 1);
+  }
 
-  await callBleCommand(listener, {
-    type: 'transfer.done.ack',
-    request_id: 'shot-1',
-    transfer_id: metaPayload.transfer_id
-  });
-
-  await callBleCommand(listener, {
-    type: 'transfer.resume',
-    request_id: 'shot-1',
-    transfer_id: metaPayload.transfer_id
-  });
-
-  const missingPayload = harness.postedPayloads.find((entry) => (
-    entry?.type === 'transfer.error'
-    && entry?.request_id === 'shot-1'
-    && entry?.code === 'no_such_transfer'
-  ));
-  assert.equal(Boolean(missingPayload), true);
+  // No error should have been posted.
+  const errorPayload = harness.postedPayloads.find((entry) => entry?.type === 'screenshot.error');
+  assert.equal(errorPayload, undefined);
 });
 
-test('service worker reports transfer_nack_failed when bridge binary post fails', async () => {
+test('service worker reports screenshot.error when stream binary send fails', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
   const listener = findBleCommandListener(harness.runtimeListeners);
+  harness.setBlePostBinaryOk(false);
+
   await callBleCommand(listener, {
     type: 'screenshot.request',
     request_id: 'shot-nack',
     source: 'desktop',
     max_chars: 20000
-  });
-
-  const metaPayload = harness.postedPayloads.find((entry) => (
-    entry?.type === 'transfer.meta' && entry?.request_id === 'shot-nack'
-  ));
-  assert.equal(Boolean(metaPayload), true);
-
-  harness.setBlePostBinaryOk(false);
-  await callBleCommand(listener, {
-    type: 'transfer.nack',
-    request_id: 'shot-nack',
-    transfer_id: metaPayload.transfer_id,
-    seq: 0
   });
 
   const errorPayload = harness.postedPayloads.find((entry) => (
-    entry?.type === 'transfer.error'
+    entry?.type === 'screenshot.error'
     && entry?.request_id === 'shot-nack'
-    && entry?.code === 'transfer_nack_failed'
   ));
-  assert.equal(Boolean(errorPayload), true);
-  assert.equal(errorPayload?.detail, 'binary_send_failed');
+  assert.ok(errorPayload, 'screenshot error posted when stream binary send fails');
+  assert.ok(errorPayload.error.includes('chunk_send_failed') || errorPayload.error.includes('binary_send_failed'),
+    'error detail references binary send failure');
 });
