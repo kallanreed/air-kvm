@@ -1,10 +1,8 @@
-// Half-pipe transport for Extension (BLE side).
+// Half-pipe transport (shared between MCP and extension).
 //
 // Provides send(obj) / onMessage(cb) over AK v2 binary frame protocol.
 // TX: serialize → chunk ≤255 bytes → send with ACK gating.
 // RX: receive chunks via onFrame() → reassemble → JSON.parse → deliver.
-//
-// Uses Uint8Array everywhere — no Node.js Buffer.
 
 import {
   kFrameType,
