@@ -127,16 +127,16 @@ export class UartTransport {
 
       timer = setTimeout(() => {
         this.log(`sendRequest timeout command=${JSON.stringify(command)}`);
-        this.halfpipe.onMessage(prevCb);
+        if (this.halfpipe) this.halfpipe.onMessage(prevCb);
         finish(reject, new Error('device_timeout'));
       }, timeoutMs);
       this.halfpipe.onMessage((msg) => {
         finish(resolve, msg);
-        this.halfpipe.onMessage(prevCb);
+        if (this.halfpipe) this.halfpipe.onMessage(prevCb);
       });
 
       this.halfpipe.send(command).catch((err) => {
-        this.halfpipe.onMessage(prevCb);
+        if (this.halfpipe) this.halfpipe.onMessage(prevCb);
         finish(reject, err);
       });
     });
@@ -159,12 +159,12 @@ export class UartTransport {
 
       timer = setTimeout(() => {
         this.log('sendControlCommand timeout');
-        this.halfpipe.onControl(prevCb);
+        if (this.halfpipe) this.halfpipe.onControl(prevCb);
         finish(reject, new Error('device_timeout'));
       }, timeoutMs);
       this.halfpipe.onControl((msg) => {
         if (this.shouldResolveForCommand(command, msg)) {
-          this.halfpipe.onControl(prevCb);
+          if (this.halfpipe) this.halfpipe.onControl(prevCb);
           finish(resolve, { ok: msg.ok !== false, msg });
         }
       });

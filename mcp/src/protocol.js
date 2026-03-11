@@ -53,15 +53,10 @@ export function validateAgentCommand(msg) {
       if (typeof msg.request_id !== 'string') {
         return { ok: false, error: 'invalid_js_exec_request' };
       }
-      const hasInlineScript = typeof msg.script === 'string' && msg.script.length > 0;
-      const hasTransferScript = typeof msg.script_transfer_id === 'string' && msg.script_transfer_id.length > 0;
-      if (!hasInlineScript && !hasTransferScript) {
+      if (typeof msg.script !== 'string' || msg.script.length === 0) {
         return { ok: false, error: 'invalid_js_exec_request' };
       }
-      if (hasInlineScript && msg.script.length > 12000) {
-        return { ok: false, error: 'invalid_js_exec_request' };
-      }
-      if (typeof msg.script_transfer_id !== 'undefined' && !hasTransferScript) {
+      if (msg.script.length > 12000) {
         return { ok: false, error: 'invalid_js_exec_request' };
       }
       if (typeof msg.tab_id !== 'undefined' && !Number.isInteger(msg.tab_id)) {
@@ -118,26 +113,6 @@ export function validateAgentCommand(msg) {
       return { ok: true };
     case 'transfer.reset':
       return { ok: true };
-    case 'transfer.cancel':
-      return typeof msg.transfer_id === 'string'
-        ? { ok: true }
-        : { ok: false, error: 'invalid_transfer_control' };
-    case 'transfer.resume':
-      return (typeof msg.transfer_id === 'string' && Number.isInteger(msg.from_seq))
-        ? { ok: true }
-        : { ok: false, error: 'invalid_transfer_control' };
-    case 'transfer.ack':
-      return (typeof msg.transfer_id === 'string' && Number.isInteger(msg.highest_contiguous_seq))
-        ? { ok: true }
-        : { ok: false, error: 'invalid_transfer_control' };
-    case 'transfer.done.ack':
-      return typeof msg.transfer_id === 'string'
-        ? { ok: true }
-        : { ok: false, error: 'invalid_transfer_control' };
-    case 'transfer.nack':
-      return (typeof msg.transfer_id === 'string' && Number.isInteger(msg.seq))
-        ? { ok: true }
-        : { ok: false, error: 'invalid_transfer_control' };
     default:
       return { ok: false, error: 'unknown_type' };
   }

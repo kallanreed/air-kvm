@@ -489,31 +489,6 @@ test('service worker handles v2 half-pipe with multi-chunk reassembly and dispat
   assert.equal(payload?.type, 'js.exec.result');
 });
 
-test('service worker transfer.reset clears inbound script transfers', async () => {
-  const harness = makeHarness();
-  await importServiceWorkerFresh();
-  const listener = findBleCommandListener(harness.runtimeListeners, harness);
-
-  // Send a partial v2 CHUNK frame (payload = kV2MaxPayload so it expects more), then reset
-  const transferId = makeV2TransferId();
-  const partialPayload = new Uint8Array(kV2MaxPayload).fill(0x70); // full-size chunk → more expected
-  const frame = encodeChunkFrame({ transferId, seq: 0, payload: partialPayload });
-  await callBleCommand(listener, { type: '__ble_raw_bytes', bytes: Array.from(frame) });
-
-  await callBleCommand(listener, {
-    type: 'transfer.reset',
-    request_id: 'reset-all-1'
-  });
-
-  await waitFor(() => harness.postedPayloads.find((payload) => (
-    payload?.type === 'transfer.reset.ok' && payload?.request_id === 'reset-all-1'
-  )));
-  const resetAck = harness.postedPayloads.find((payload) => (
-    payload?.type === 'transfer.reset.ok' && payload?.request_id === 'reset-all-1'
-  ));
-  assert.equal(Boolean(resetAck), true);
-});
-
 test('service worker returns js_exec_busy when a js exec request is already in flight', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();

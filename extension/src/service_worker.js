@@ -42,10 +42,6 @@ function debugLog(...args) {
   console.log('[airkvm-sw]', `[${kSwInstanceId}]`, ...args);
 }
 
-function activeTransferIds() {
-  return [];
-}
-
 async function writeSwBreadcrumb(event, detail = null) {
   if (!chrome?.storage?.session?.set) return;
   try {
@@ -54,8 +50,7 @@ async function writeSwBreadcrumb(event, detail = null) {
         instance_id: kSwInstanceId,
         ts: Date.now(),
         event,
-        detail,
-        active_transfer_ids: activeTransferIds()
+        detail
       }
     });
   } catch {
@@ -78,8 +73,7 @@ function emitSwAliveHeartbeat() {
     type: 'ble.sw.alive',
     target: 'ble-page',
     instance_id: kSwInstanceId,
-    ts: Date.now(),
-    active_transfer_ids: activeTransferIds()
+    ts: Date.now()
   }).catch(() => {});
 }
 
@@ -946,19 +940,6 @@ async function sendScreenshot(command) {
   });
 }
 
-async function handleTransferReset(command) {
-  const hp = getHalfPipe();
-  await hp.reset();
-  void writeSwBreadcrumb('transfer_reset', {
-    request_id: command?.request_id || null
-  });
-  await hp.send({
-    type: 'transfer.reset.ok',
-    request_id: command?.request_id || null,
-    ts: Date.now()
-  });
-}
-
 async function sendTabsList(command) {
   const requestId = command.request_id || makeRequestId();
   const tabs = await chrome.tabs.query({ lastFocusedWindow: true });
@@ -1174,22 +1155,6 @@ const kBleCommandHandlers = {
         duration_ms: 0,
         error_code: 'js_exec_failed',
         error: clipText(detail || 'js_exec_failed'),
-        ts: Date.now()
-      });
-    }
-  ),
-  'transfer.reset': (command) => runBridgeHandler(
-    command,
-    'handleTransferReset',
-    handleTransferReset,
-    async (cmd, detail) => {
-      await getHalfPipe().send({
-        type: 'transfer.error',
-        request_id: cmd?.request_id || null,
-        transfer_id: cmd?.transfer_id || null,
-        source: cmd?.source || null,
-        code: 'transfer_reset_failed',
-        detail,
         ts: Date.now()
       });
     }

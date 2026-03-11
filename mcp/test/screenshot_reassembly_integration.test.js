@@ -3,12 +3,11 @@ import assert from 'node:assert/strict';
 
 import { createServer } from '../src/server.js';
 
-function makeStreamHarness(streamRequestImpl) {
+function makeHarness(sendRequestImpl) {
   const sent = [];
   const transport = {
-    sendCommand: async () => ({ ok: true, msg: { ok: true } }),
-    sendCommandNoWait: async () => ({ ok: true }),
-    streamRequest: streamRequestImpl,
+    sendRequest: sendRequestImpl,
+    sendControlCommand: async () => ({ ok: true, msg: { ok: true } }),
   };
   const server = createServer({
     transport,
@@ -27,20 +26,17 @@ async function callScreenshotTool(server, requestId, extraArgs = {}) {
       arguments: { request_id: requestId, ...extraArgs }
     }
   });
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise((resolve) => setTimeout(resolve, 50));
 }
 
-test('screenshot via streamRequest returns base64 payload', async () => {
+test('screenshot via sendRequest returns base64 payload', async () => {
   const fakeBase64 = Buffer.from('fakeImageData').toString('base64');
-  const { sent, server } = makeStreamHarness(async () => ({
-    ok: true,
-    data: {
-      type: 'screenshot.response',
-      request_id: 'shot-stream-1',
-      source: 'tab',
-      data: fakeBase64,
-      mime: 'image/jpeg',
-    },
+  const { sent, server } = makeHarness(async () => ({
+    type: 'screenshot.response',
+    request_id: 'shot-stream-1',
+    source: 'tab',
+    data: fakeBase64,
+    mime: 'image/jpeg',
   }));
 
   await callScreenshotTool(server, 'shot-stream-1', { max_chars: 200000 });
@@ -51,8 +47,8 @@ test('screenshot via streamRequest returns base64 payload', async () => {
   assert.equal(payload.mime, 'image/jpeg');
 });
 
-test('screenshot streamRequest timeout surfaces as transport_error', async () => {
-  const { sent, server } = makeStreamHarness(async () => {
+test('screenshot sendRequest timeout surfaces as transport_error', async () => {
+  const { sent, server } = makeHarness(async () => {
     throw new Error('device_timeout');
   });
 
@@ -64,32 +60,17 @@ test('screenshot streamRequest timeout surfaces as transport_error', async () =>
   assert.equal(payload.detail, 'device_timeout');
 });
 
-test('screenshot.error via streamRequest is surfaced as structured tool error', async () => {
-  const { sent, server } = makeStreamHarness(async () => ({
-    ok: true,
-    data: {
-      type: 'screenshot.error',
-      request_id: 'shot-err-1',
-      source: 'tab',
-      error: 'desktop_capture_denied',
-    },
+test('screenshot.error via sendRequest is surfaced as structured tool error', async () => {
+  const { sent, server } = makeHarness(async () => ({
+    type: 'screenshot.error',
+    request_id: 'shot-err-1',
+    source: 'tab',
+    ok: false,
+    error: 'desktop_capture_denied',
   }));
 
   await callScreenshotTool(server, 'shot-err-1');
   const payload = JSON.parse(sent[0].result.content[0].text);
   assert.equal(sent[0].isError, true);
   assert.equal(payload.error, 'desktop_capture_denied');
-});
-
-test('screenshot_tab errors when streamRequest is missing', async () => {
-  const sent = [];
-  const transport = {
-    sendCommand: async () => ({ ok: true, msg: { ok: true } }),
-  };
-  const server = createServer({ transport, send: (msg) => sent.push(msg) });
-
-  await callScreenshotTool(server, 'shot-no-stream');
-  const payload = JSON.parse(sent[0].result.content[0].text);
-  assert.equal(sent[0].isError, true);
-  assert.equal(payload.error, 'stream_transport_required');
 });

@@ -60,7 +60,7 @@ function maybePersistScreenshot(name, data) {
 function compactFrame(frame) {
   if (!frame || typeof frame !== 'object') return frame;
   if (frame.kind === 'log') return { kind: 'log', msg: frame.msg };
-  if (frame.kind === 'ctrl' || frame.kind === 'legacy_ctrl') return { kind: frame.kind, msg: frame.msg };
+  if (frame.kind === 'ctrl') return { kind: 'ctrl', msg: frame.msg };
   if (frame.kind === 'invalid') return { kind: 'invalid', raw: frame.raw };
   return frame;
 }
@@ -117,11 +117,7 @@ export function createServer({ transport, send }) {
 
     // airkvm_send: firmware-local HID command
     if (name === 'airkvm_send') {
-      const runFirmwareLocal = typeof transport.sendControlCommand === 'function'
-        ? transport.sendControlCommand(command)
-        : transport.sendCommand(command);
-
-      runFirmwareLocal.then((result) => {
+      transport.sendControlCommand(command).then((result) => {
         const isExplicitRejection = result?.msg && result.ok === false;
         if (isExplicitRejection) {
           const line = toDeviceLine(command).trim();
@@ -160,89 +156,7 @@ export function createServer({ transport, send }) {
       : (name === 'airkvm_screenshot_tab' || name === 'airkvm_screenshot_desktop') ? 30000
       : 30000;
 
-    const runBridge = typeof transport.sendRequest === 'function'
-      ? transport.sendRequest(command, { timeoutMs })
-      : (() => {
-        // Fallback to old transport paths for backward compat
-        const isStreamOnlyTool = (
-          name === 'airkvm_dom_snapshot' ||
-          name === 'airkvm_screenshot_tab' ||
-          name === 'airkvm_screenshot_desktop'
-        );
-        if (isStreamOnlyTool) {
-          if (typeof transport.streamRequest !== 'function') {
-            return Promise.resolve({
-              __fallback_error: true,
-              error: 'stream_transport_required',
-              detail: `${name} requires transport.streamRequest`
-            });
-          }
-          return transport.streamRequest(command, { timeoutMs }).then((result) => {
-            const msg = result.data;
-            if (!msg || msg.ok === false || msg.type === 'dom.snapshot.error' || msg.type === 'screenshot.error') {
-              return { __fallback_structured: true, ok: false, data: { request_id: command.request_id, error: msg?.error || 'device_error', detail: msg } };
-            }
-            if (name === 'airkvm_dom_snapshot') {
-              return { __fallback_structured: true, ok: true, data: { request_id: command.request_id, snapshot: msg } };
-            }
-            return {
-              __fallback_structured: true, ok: true,
-              data: {
-                request_id: command.request_id,
-                source: msg.source || command.source,
-                mime: msg.mime || 'image/jpeg',
-                base64: msg.data || msg.base64 || '',
-              },
-            };
-          });
-        }
-        const responseCollector = createResponseCollector(name, command);
-        if (name === 'airkvm_exec_js_tab') {
-          const serializedBytes = Buffer.byteLength(JSON.stringify(command), 'utf8');
-          if (serializedBytes > 4096 && typeof transport.streamSendCommand === 'function') {
-            return transport.streamSendCommand(command, responseCollector, { timeoutMs: 30000 }).then((result) => {
-              return { __fallback_structured: true, ok: result.ok, data: result.data };
-            });
-          }
-        }
-        return transport.sendCommand(command, responseCollector).then((result) => {
-          return { __fallback_structured: true, ok: result.ok, data: result.data };
-        });
-      })();
-
-    runBridge.then((msg) => {
-      // Handle fallback error from missing streamRequest
-      if (msg?.__fallback_error) {
-        send({
-          jsonrpc: '2.0', id,
-          result: makeToolResultJson({
-            request_id: command.request_id || null,
-            error: msg.error,
-            detail: msg.detail
-          }),
-          isError: true
-        });
-        return;
-      }
-
-      // Handle fallback structured response from old transport
-      if (msg?.__fallback_structured) {
-        if (msg.ok === false) {
-          send({
-            jsonrpc: '2.0', id,
-            result: makeToolResultJson(msg.data || { error: 'request_failed' }),
-            isError: true
-          });
-          return;
-        }
-        send({
-          jsonrpc: '2.0', id,
-          result: makeToolResultJson(maybePersistScreenshot(name, msg.data || { ok: true }))
-        });
-        return;
-      }
-
-      // Half-pipe path: msg is the complete deserialized response
+    transport.sendRequest(command, { timeoutMs }).then((msg) => {
       if (!msg || msg.ok === false || msg.error) {
         send({
           jsonrpc: '2.0', id,
