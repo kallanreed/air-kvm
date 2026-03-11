@@ -3,7 +3,6 @@ const UART_RX_CHAR_UUID = '6e400102-b5a3-f393-e0a9-e50e24dccb01';
 const UART_TX_CHAR_UUID = '6e400103-b5a3-f393-e0a9-e50e24dccb01';
 const kBleWriteChunkBytes = 160;
 const kDebug = true;
-const kMaxControlBufferChars = 32 * 1024;
 let verboseDebugEnabled = false;
 let debugLogger = null;
 
@@ -72,14 +71,12 @@ async function describeGatt(server) {
 let bleDevice = null;
 let rxCharacteristic = null;
 let txCharacteristic = null;
-let bleLineBuffer = '';
 let commandHandler = null;
 
 export function __resetBleForTest() {
   bleDevice = null;
   rxCharacteristic = null;
   txCharacteristic = null;
-  bleLineBuffer = '';
   commandHandler = null;
   verboseDebugEnabled = false;
   debugLogger = null;
@@ -92,64 +89,7 @@ export function setBleDebugLogger(logger) {
 export function setBleVerboseDebug(enabled) {
   verboseDebugEnabled = Boolean(enabled);
 }
-
-function extractJsonObjects(input) {
-  const messages = [];
-  if (!input) return { messages, rest: '' };
-
-  let start = -1;
-  let depth = 0;
-  let inString = false;
-  let escape = false;
-  let consumedUntil = 0;
-
-  for (let i = 0; i < input.length; i += 1) {
-    const ch = input[i];
-    if (start === -1) {
-      if (ch === '{') {
-        start = i;
-        depth = 1;
-        inString = false;
-        escape = false;
-      } else if (!/\s/.test(ch)) {
-        // Drop non-whitespace garbage before the next JSON object.
-        consumedUntil = i + 1;
-      }
-      continue;
-    }
-
-    if (inString) {
-      if (escape) {
-        escape = false;
-      } else if (ch === '\\') {
-        escape = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (ch === '"') {
-      inString = true;
-      continue;
-    }
-    if (ch === '{') {
-      depth += 1;
-      continue;
-    }
-    if (ch === '}') {
-      depth -= 1;
-      if (depth === 0) {
-        messages.push(input.slice(start, i + 1));
-        consumedUntil = i + 1;
-        start = -1;
-      }
-    }
-  }
-
-  return { messages, rest: input.slice(consumedUntil) };
-}
-
+
 function hasBluetooth(navigatorLike) {
   return Boolean(navigatorLike?.bluetooth?.requestDevice);
 }
@@ -336,9 +276,7 @@ export async function connectBle(deps = {}) {
   bleDevice = device;
   rxCharacteristic = rx;
   txCharacteristic = tx;
-  bleLineBuffer = '';
 
-  const decoder = deps.decoder || new TextDecoder();
   if (typeof txCharacteristic?.addEventListener === 'function') {
     txCharacteristic.addEventListener('characteristicvaluechanged', (event) => {
       const value = event?.target?.value;
@@ -351,9 +289,6 @@ export async function connectBle(deps = {}) {
       if (typeof onCmd === 'function') {
         onCmd({ type: '__ble_raw_bytes', bytes: Array.from(raw) });
       }
-
-      // Keep existing text/JSON path for backward compat during transition
-      onBleBytes(decoder.decode(value), onCmd);
     });
   }
   if (typeof txCharacteristic?.startNotifications === 'function') {
@@ -387,7 +322,6 @@ export async function connectBle(deps = {}) {
   device.addEventListener('gattserverdisconnected', () => {
     rxCharacteristic = null;
     txCharacteristic = null;
-    bleLineBuffer = '';
     if (typeof deps.onDisconnect === 'function') {
       try {
         deps.onDisconnect();
@@ -435,7 +369,6 @@ export function disconnectBle() {
   bleDevice = null;
   rxCharacteristic = null;
   txCharacteristic = null;
-  bleLineBuffer = '';
 }
 
 async function ensureConnected(deps = {}) {
@@ -599,57 +532,6 @@ export async function postBinary(bytes, deps = {}) {
   } catch {
     debugLog('postBinary failed', { traceId });
     return false;
-  }
-}
-
-function onBleBytes(text, onCommand) {
-  if (!text || typeof text !== 'string') return;
-  debugVerbose('rx bytes', { bytes: text.length, preview: text.slice(0, 160) });
-  bleLineBuffer += text;
-  const newlineIndex = bleLineBuffer.lastIndexOf('\n');
-  if (newlineIndex >= 0) {
-    const complete = bleLineBuffer.slice(0, newlineIndex + 1);
-    bleLineBuffer = bleLineBuffer.slice(newlineIndex + 1);
-    const lines = complete.split('\n');
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const msg = JSON.parse(trimmed);
-        debugLog('rx json', msg?.type || 'unknown');
-        if (typeof onCommand === 'function') onCommand(msg);
-        continue;
-      } catch {
-        // Fall through and salvage any valid JSON objects in the line.
-      }
-      const { messages } = extractJsonObjects(trimmed);
-      for (const serialized of messages) {
-        try {
-          const msg = JSON.parse(serialized);
-          debugLog('rx json', msg?.type || 'unknown');
-          if (typeof onCommand === 'function') onCommand(msg);
-        } catch {
-          // Ignore malformed objects.
-        }
-      }
-    }
-  }
-
-  const { messages, rest } = extractJsonObjects(bleLineBuffer);
-  bleLineBuffer = rest;
-  for (const serialized of messages) {
-    try {
-      const msg = JSON.parse(serialized);
-      debugLog('rx json', msg?.type || 'unknown');
-      if (typeof onCommand === 'function') onCommand(msg);
-    } catch {
-      // Ignore malformed objects.
-    }
-  }
-
-  if (bleLineBuffer.length > kMaxControlBufferChars) {
-    // Drop pathological partial data to avoid wedging parser forever.
-    bleLineBuffer = '';
   }
 }
 

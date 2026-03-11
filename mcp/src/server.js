@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url';
 import { validateAgentCommand, toDeviceLine } from './protocol.js';
 import {
   buildCommandForTool,
-  createResponseCollector,
   isKnownTool,
   isStructuredTool,
   TOOL_DEFINITIONS

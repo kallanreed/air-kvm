@@ -19,10 +19,6 @@ import {
   encodeAckFrame,
   encodeNackFrame,
   encodeResetFrame,
-  // v1 backward compat
-  makeTransferId,
-  parseTransferId,
-  encodeTransferChunkFrame,
 } from '../src/binary_frame.js';
 
 const enc = new TextEncoder();
@@ -446,39 +442,6 @@ describe('bad type', () => {
     const r = decodeFrame(frame);
     assert.equal(r.ok, false);
     assert.equal(r.error, 'bad_type');
-  });
-});
-
-// -------------------------------------------------------
-// v1 backward compat
-// -------------------------------------------------------
-describe('v1 backward compat', () => {
-  it('makeTransferId returns expected shape', () => {
-    const tid = makeTransferId();
-    assert.equal(typeof tid.numeric, 'number');
-    assert.equal(typeof tid.string, 'string');
-    assert.ok(tid.string.startsWith('tx_'));
-  });
-
-  it('parseTransferId round-trips', () => {
-    const tid = makeTransferId();
-    const n = parseTransferId(tid.string);
-    assert.equal(n, tid.numeric);
-  });
-
-  it('encodeTransferChunkFrame produces valid v1 frame', () => {
-    const tid = makeTransferId();
-    const payload = new Uint8Array([1, 2, 3, 4]);
-    const frame = encodeTransferChunkFrame({ transferIdNumeric: tid.numeric, seq: 0, payloadBytes: payload });
-    // v1 frames: 18 byte header + payload
-    assert.equal(frame.length, 18 + payload.length);
-    // magic bytes
-    assert.equal(frame[0], 0x41);
-    assert.equal(frame[1], 0x4b);
-    // version=1
-    assert.equal(frame[2], 1);
-    // type=1
-    assert.equal(frame[3], 1);
   });
 });
 
