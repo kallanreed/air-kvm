@@ -1,9 +1,6 @@
 import { SerialPort } from 'serialport';
-import { tryExtractFrameFromBuffer } from './binary_frame.js';
+import { tryExtractFrameFromBuffer, kMagic0, kMagic1 } from './binary_frame.js';
 import { StreamSender, StreamReceiver } from './stream.js';
-
-const kMagic0 = 0x41;
-const kMagic1 = 0x4b;
 
 export function parseDeviceLine(line) {
   let parsed;
