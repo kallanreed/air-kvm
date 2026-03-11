@@ -1,5 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {
+  encodeAckFrame,
+  encodeChunkFrame,
+  decodeFrame,
+  kV2MaxPayload,
+  makeV2TransferId,
+} from '../src/binary_frame.js';
 
 const kTrustedSender = {
   id: 'test',
@@ -37,6 +44,7 @@ function makeHarness() {
   let cdpWindowMethodMissing = false;
   let autoAckStreamFrames = true;
   let bleCommandListenerRef = null;
+  const chunkBuffers = {};
   let getWindowImpl = async (windowId) => ({
     id: windowId,
     left: 130,
@@ -94,16 +102,36 @@ function makeHarness() {
           postedBinary.push(msg.bytes);
           if (blePostBinaryOk && autoAckStreamFrames && bleCommandListenerRef) {
             const rawBytes = Uint8Array.from(msg.bytes || []);
-            if (rawBytes.length >= 18 && rawBytes[0] === 0x41 && rawBytes[1] === 0x4B) {
-              const dv = new DataView(rawBytes.buffer, rawBytes.byteOffset, rawBytes.byteLength);
-              const tidNum = dv.getUint32(4, true);
-              const rawSeq = dv.getUint32(8, true);
-              const seq = rawSeq & 0x7FFFFFFF;
-              const tid = `tx_${(tidNum >>> 0).toString(16).padStart(8, '0')}`;
-              const ref = bleCommandListenerRef;
-              setTimeout(() => {
-                ref({ type: 'ble.command', command: { type: 'stream.ack', transfer_id: tid, seq } }, kTrustedSender, () => {});
-              }, 0);
+            if (rawBytes.length >= 12 && rawBytes[0] === 0x41 && rawBytes[1] === 0x4B) {
+              const decoded = decodeFrame(rawBytes);
+              if (decoded && decoded.type === 1) { // CHUNK
+                const ackFrame = encodeAckFrame({ transferId: decoded.transferId, seq: decoded.seq });
+                const ref = bleCommandListenerRef;
+                // Store chunk for reassembly
+                const key = decoded.transferId;
+                if (!chunkBuffers[key]) chunkBuffers[key] = [];
+                chunkBuffers[key].push(decoded.payload);
+                // If last chunk (payload < kV2MaxPayload), reassemble and push to postedPayloads
+                if (decoded.payload.length < kV2MaxPayload) {
+                  const total = chunkBuffers[key].reduce((s, c) => s + c.length, 0);
+                  const assembled = new Uint8Array(total);
+                  let off = 0;
+                  for (const c of chunkBuffers[key]) { assembled.set(c, off); off += c.length; }
+                  delete chunkBuffers[key];
+                  try {
+                    const parsed = JSON.parse(new TextDecoder().decode(assembled));
+                    postedPayloads.push(parsed);
+                  } catch { /* ignore parse error */ }
+                }
+                // Send ACK back via __ble_raw_bytes
+                setTimeout(() => {
+                  ref(
+                    { type: 'ble.command', command: { type: '__ble_raw_bytes', bytes: Array.from(ackFrame) } },
+                    kTrustedSender,
+                    () => {}
+                  );
+                }, 0);
+              }
             }
           }
           return { ok: blePostBinaryOk };
@@ -286,23 +314,24 @@ async function waitFor(checkFn, { timeoutMs = 1500, intervalMs = 10 } = {}) {
 
 function parseTransferChunkFrame(raw) {
   const bytes = Uint8Array.from(raw || []);
-  if (bytes.length < 18) return null;
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (bytes.length < 12) return null;
+  const decoded = decodeFrame(bytes);
+  if (!decoded) return null;
   return {
     magic0: bytes[0],
     magic1: bytes[1],
-    version: bytes[2],
-    frameType: bytes[3],
-    transferIdNumeric: view.getUint32(4, true),
-    seq: view.getUint32(8, true),
-    payloadLength: view.getUint16(12, true),
+    frameType: decoded.type,
+    transferId: decoded.transferId,
+    seq: decoded.seq,
+    payloadLength: decoded.payload?.length || 0,
     totalLength: bytes.length
   };
 }
 
 async function callBleCommand(listener, command, sender = kTrustedSender) {
   return new Promise((resolve) => {
-    const returned = listener({ type: 'ble.command', command }, sender, (msg) => {
+    let returned;
+    returned = listener({ type: 'ble.command', command }, sender, (msg) => {
       resolve({ returned, response: msg });
     });
     if (returned !== true) {
@@ -311,7 +340,7 @@ async function callBleCommand(listener, command, sender = kTrustedSender) {
   });
 }
 
-function findBleCommandListener(runtimeListeners) {
+function findBleCommandListener(runtimeListeners, harness = null) {
   const listener = runtimeListeners.find((candidate) => {
     let called = false;
     const out = candidate({ type: 'ble.command', command: { type: 'unknown' } }, kTrustedSender, () => {
@@ -320,7 +349,32 @@ function findBleCommandListener(runtimeListeners) {
     return out === true || called;
   });
   assert.equal(typeof listener, 'function');
+  if (harness && typeof harness.setBleCommandListener === 'function') {
+    harness.setBleCommandListener(listener);
+  }
   return listener;
+}
+
+// Send a JSON command to the service worker as v2 binary CHUNK frames via __ble_raw_bytes.
+async function sendV2Command(listener, command) {
+  const json = JSON.stringify(command);
+  const bytes = new TextEncoder().encode(json);
+  const transferId = makeV2TransferId();
+  const chunks = [];
+  for (let off = 0; off < bytes.length; off += kV2MaxPayload) {
+    chunks.push(bytes.slice(off, off + kV2MaxPayload));
+  }
+  if (chunks.length > 0 && chunks[chunks.length - 1].length === kV2MaxPayload) {
+    chunks.push(new Uint8Array(0));
+  }
+  if (chunks.length === 0) {
+    chunks.push(new Uint8Array(0));
+  }
+  for (let seq = 0; seq < chunks.length; seq += 1) {
+    const frame = encodeChunkFrame({ transferId, seq, payload: chunks[seq] });
+    await callBleCommand(listener, { type: '__ble_raw_bytes', bytes: Array.from(frame) });
+  }
+  return { transferId };
 }
 
 test('service worker handles js.exec.request and posts js.exec.result via bridge', async () => {
@@ -334,7 +388,7 @@ test('service worker handles js.exec.request and posts js.exec.result via bridge
     truncated: false
   }));
 
-  const listener = findBleCommandListener(harness.runtimeListeners);
+  const listener = findBleCommandListener(harness.runtimeListeners, harness);
   const { returned, response } = await callBleCommand(listener, {
     type: 'js.exec.request',
     request_id: 'js-1',
@@ -356,11 +410,10 @@ test('service worker handles js.exec.request and posts js.exec.result via bridge
   assert.equal(resultPayload.truncated, false);
 });
 
-test('service worker handles js.exec.request delivered via stream.data chunks', async () => {
+test('service worker handles js.exec.request delivered via v2 half-pipe chunks', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
-  const listener = findBleCommandListener(harness.runtimeListeners);
-  const transferId = 'tx_abcdef01';
+  const listener = findBleCommandListener(harness.runtimeListeners, harness);
   const command = {
     type: 'js.exec.request',
     request_id: 'js-xfer-1',
@@ -368,18 +421,9 @@ test('service worker handles js.exec.request delivered via stream.data chunks', 
     timeout_ms: 300,
     max_result_chars: 200
   };
-  const json = JSON.stringify(command);
-  const bytes = new TextEncoder().encode(json);
-  const dataB64 = Buffer.from(bytes).toString('base64');
 
-  // Single-chunk stream.data delivery
-  await callBleCommand(listener, {
-    type: 'stream.data',
-    transfer_id: transferId,
-    seq: 0,
-    is_final: true,
-    data_b64: dataB64
-  });
+  // Single-transfer v2 chunk delivery via __ble_raw_bytes
+  await sendV2Command(listener, command);
 
   await waitFor(() => harness.postedPayloads.find((entry) => (
     entry?.type === 'js.exec.result' && entry?.request_id === 'js-xfer-1'
@@ -390,11 +434,10 @@ test('service worker handles js.exec.request delivered via stream.data chunks', 
   assert.equal(payload?.type, 'js.exec.result');
 });
 
-test('service worker emits stream.ack while receiving stream.data chunks', async () => {
+test('service worker emits v2 ACK frames while receiving v2 CHUNK frames', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
-  const listener = findBleCommandListener(harness.runtimeListeners);
-  const transferId = 'tx_ack_abcd';
+  const listener = findBleCommandListener(harness.runtimeListeners, harness);
   const command = {
     type: 'js.exec.request',
     request_id: 'js-ack-1',
@@ -404,73 +447,38 @@ test('service worker emits stream.ack while receiving stream.data chunks', async
   };
   const json = JSON.stringify(command);
   const bytes = new TextEncoder().encode(json);
+  const transferId = makeV2TransferId();
   const mid = Math.floor(bytes.length / 2);
-  const chunk0B64 = Buffer.from(bytes.slice(0, mid)).toString('base64');
-  const chunk1B64 = Buffer.from(bytes.slice(mid)).toString('base64');
 
-  await callBleCommand(listener, {
-    type: 'stream.data',
-    transfer_id: transferId,
-    seq: 0,
-    is_final: false,
-    data_b64: chunk0B64
-  });
-  await callBleCommand(listener, {
-    type: 'stream.data',
-    transfer_id: transferId,
-    seq: 1,
-    is_final: true,
-    data_b64: chunk1B64
-  });
+  // Send two v2 CHUNK frames
+  const frame0 = encodeChunkFrame({ transferId, seq: 0, payload: bytes.slice(0, mid) });
+  await callBleCommand(listener, { type: '__ble_raw_bytes', bytes: Array.from(frame0) });
+  const frame1 = encodeChunkFrame({ transferId, seq: 1, payload: bytes.slice(mid) });
+  await callBleCommand(listener, { type: '__ble_raw_bytes', bytes: Array.from(frame1) });
 
-  const ack = harness.postedPayloads.find((payload) => (
-    payload?.type === 'stream.ack' && payload?.transfer_id === transferId
-  ));
-  assert.equal(Boolean(ack), true);
-  assert.equal(typeof ack?.seq, 'number');
+  // Half-pipe sends ACK frames as binary via ble.postBinary
+  const ackFrames = harness.postedBinary
+    .map((raw) => decodeFrame(Uint8Array.from(raw)))
+    .filter((f) => f && f.type === 4); // kFrameType.ACK
+  assert.ok(ackFrames.length >= 1, 'at least one ACK frame sent');
+  assert.equal(ackFrames[0].transferId, transferId);
 });
 
-test('service worker handles stream.data with multi-chunk reassembly and dispatches command', async () => {
+test('service worker handles v2 half-pipe with multi-chunk reassembly and dispatches command', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
-  const listener = findBleCommandListener(harness.runtimeListeners);
-  const transferId = 'tx_multi_abcd';
+  const listener = findBleCommandListener(harness.runtimeListeners, harness);
+  // Build a command large enough to span multiple 255-byte v2 chunks
   const command = {
     type: 'js.exec.request',
     request_id: 'js-multi-1',
-    script: 'return 42;',
+    script: 'return ' + 'x'.repeat(600) + ';',
     timeout_ms: 300,
     max_result_chars: 200
   };
-  const json = JSON.stringify(command);
-  const bytes = new TextEncoder().encode(json);
-  // Split into 3 chunks
-  const third = Math.floor(bytes.length / 3);
-  const chunk0B64 = Buffer.from(bytes.slice(0, third)).toString('base64');
-  const chunk1B64 = Buffer.from(bytes.slice(third, third * 2)).toString('base64');
-  const chunk2B64 = Buffer.from(bytes.slice(third * 2)).toString('base64');
 
-  await callBleCommand(listener, {
-    type: 'stream.data',
-    transfer_id: transferId,
-    seq: 0,
-    is_final: false,
-    data_b64: chunk0B64
-  });
-  await callBleCommand(listener, {
-    type: 'stream.data',
-    transfer_id: transferId,
-    seq: 1,
-    is_final: false,
-    data_b64: chunk1B64
-  });
-  await callBleCommand(listener, {
-    type: 'stream.data',
-    transfer_id: transferId,
-    seq: 2,
-    is_final: true,
-    data_b64: chunk2B64
-  });
+  // sendV2Command splits into proper kV2MaxPayload-sized chunks
+  await sendV2Command(listener, command);
 
   await waitFor(() => harness.postedPayloads.find((entry) => (
     entry?.type === 'js.exec.result' && entry?.request_id === 'js-multi-1'
@@ -484,21 +492,22 @@ test('service worker handles stream.data with multi-chunk reassembly and dispatc
 test('service worker transfer.reset clears inbound script transfers', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
-  const listener = findBleCommandListener(harness.runtimeListeners);
+  const listener = findBleCommandListener(harness.runtimeListeners, harness);
 
-  // Send a partial stream.data chunk (no is_final), then reset
-  await callBleCommand(listener, {
-    type: 'stream.data',
-    transfer_id: 'tx_reset_abcd',
-    seq: 0,
-    is_final: false,
-    data_b64: Buffer.from('partial').toString('base64')
-  });
+  // Send a partial v2 CHUNK frame (payload = kV2MaxPayload so it expects more), then reset
+  const transferId = makeV2TransferId();
+  const partialPayload = new Uint8Array(kV2MaxPayload).fill(0x70); // full-size chunk → more expected
+  const frame = encodeChunkFrame({ transferId, seq: 0, payload: partialPayload });
+  await callBleCommand(listener, { type: '__ble_raw_bytes', bytes: Array.from(frame) });
+
   await callBleCommand(listener, {
     type: 'transfer.reset',
     request_id: 'reset-all-1'
   });
 
+  await waitFor(() => harness.postedPayloads.find((payload) => (
+    payload?.type === 'transfer.reset.ok' && payload?.request_id === 'reset-all-1'
+  )));
   const resetAck = harness.postedPayloads.find((payload) => (
     payload?.type === 'transfer.reset.ok' && payload?.request_id === 'reset-all-1'
   ));
@@ -514,7 +523,7 @@ test('service worker returns js_exec_busy when a js exec request is already in f
     resolveFirst = () => resolve({ ok: true, value_type: 'number', value_json: '1', truncated: false });
   }));
 
-  const listener = findBleCommandListener(harness.runtimeListeners);
+  const listener = findBleCommandListener(harness.runtimeListeners, harness);
 
   listener({
     type: 'ble.command',
@@ -548,7 +557,7 @@ test('service worker returns js_exec_busy when a js exec request is already in f
 test('service worker rejects ble.command from untrusted sender', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
-  const listener = findBleCommandListener(harness.runtimeListeners);
+  const listener = findBleCommandListener(harness.runtimeListeners, harness);
 
   let response = null;
   const returned = listener({
@@ -570,7 +579,7 @@ test('service worker rejects ble.command from untrusted sender', async () => {
 test('service worker rejects ble.command when sender id matches but sender url is malformed', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
-  const listener = findBleCommandListener(harness.runtimeListeners);
+  const listener = findBleCommandListener(harness.runtimeListeners, harness);
 
   let response = null;
   const returned = listener({
@@ -602,7 +611,7 @@ test('service worker releases js exec lock after bounded post-timeout hold', asy
     return Promise.resolve({ ok: true, value_type: 'number', value_json: '2', truncated: false });
   });
 
-  const listener = findBleCommandListener(harness.runtimeListeners);
+  const listener = findBleCommandListener(harness.runtimeListeners, harness);
   await callBleCommand(listener, {
     type: 'js.exec.request',
     request_id: 'js-timeout-a',
@@ -645,7 +654,7 @@ test('service worker releases js exec lock after bounded post-timeout hold', asy
 test('service worker returns invalid_js_exec_request for empty script', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
-  const listener = findBleCommandListener(harness.runtimeListeners);
+  const listener = findBleCommandListener(harness.runtimeListeners, harness);
   await callBleCommand(listener, {
     type: 'js.exec.request',
     request_id: 'js-invalid',
@@ -665,7 +674,7 @@ test('service worker maps runtime script failures to js_exec_runtime_error', asy
     error_code: 'js_exec_runtime_error',
     error: 'boom'
   }));
-  const listener = findBleCommandListener(harness.runtimeListeners);
+  const listener = findBleCommandListener(harness.runtimeListeners, harness);
   await callBleCommand(listener, {
     type: 'js.exec.request',
     request_id: 'js-runtime',
@@ -680,7 +689,7 @@ test('service worker maps runtime script failures to js_exec_runtime_error', asy
 test('service worker handles tab.open.request and posts tab.open via bridge', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
-  const listener = findBleCommandListener(harness.runtimeListeners);
+  const listener = findBleCommandListener(harness.runtimeListeners, harness);
   await callBleCommand(listener, {
     type: 'tab.open.request',
     request_id: 'open-1',
@@ -702,7 +711,7 @@ test('service worker returns tab.open.error when chrome.tabs.create fails', asyn
   harness.setCreateTabImpl(async () => {
     throw new Error('tabs_create_failed');
   });
-  const listener = findBleCommandListener(harness.runtimeListeners);
+  const listener = findBleCommandListener(harness.runtimeListeners, harness);
   await callBleCommand(listener, {
     type: 'tab.open.request',
     request_id: 'open-err',
@@ -717,7 +726,7 @@ test('service worker returns tab.open.error when chrome.tabs.create fails', asyn
 test('service worker handles window.bounds.request and posts window.bounds via bridge', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
-  const listener = findBleCommandListener(harness.runtimeListeners);
+  const listener = findBleCommandListener(harness.runtimeListeners, harness);
   await callBleCommand(listener, {
     type: 'window.bounds.request',
     request_id: 'wb-1'
@@ -750,7 +759,7 @@ test('service worker falls back to chrome.windows.get when Browser.getWindowForT
     height: 900,
     state: 'normal'
   }));
-  const listener = findBleCommandListener(harness.runtimeListeners);
+  const listener = findBleCommandListener(harness.runtimeListeners, harness);
   await callBleCommand(listener, {
     type: 'window.bounds.request',
     request_id: 'wb-fallback-1'
@@ -775,7 +784,7 @@ test('service worker returns window.bounds.error when target tab is unavailable'
   globalThis.chrome.tabs.get = async () => {
     throw new Error('no_such_tab');
   };
-  const listener = findBleCommandListener(harness.runtimeListeners);
+  const listener = findBleCommandListener(harness.runtimeListeners, harness);
   await callBleCommand(listener, {
     type: 'window.bounds.request',
     request_id: 'wb-err'
@@ -789,8 +798,7 @@ test('service worker returns window.bounds.error when target tab is unavailable'
 test('service worker dispatches dom snapshot requests and ignores unknown commands', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
-  const listener = findBleCommandListener(harness.runtimeListeners);
-  harness.setBleCommandListener(listener);
+  const listener = findBleCommandListener(harness.runtimeListeners, harness);
   await callBleCommand(listener, {
     type: 'dom.snapshot.request',
     request_id: 'dom-1'
@@ -814,8 +822,7 @@ test('service worker dispatches dom snapshot requests and ignores unknown comman
 test('service worker sends screenshot via stream and verifies capture', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
-  const listener = findBleCommandListener(harness.runtimeListeners);
-  harness.setBleCommandListener(listener);
+  const listener = findBleCommandListener(harness.runtimeListeners, harness);
   await callBleCommand(listener, {
     type: 'screenshot.request',
     request_id: 'shot-1',
@@ -845,8 +852,7 @@ test('service worker sends screenshot via stream and verifies capture', async ()
     const firstFrame = parseTransferChunkFrame(harness.postedBinary[0]);
     assert.equal(firstFrame?.magic0, 0x41);
     assert.equal(firstFrame?.magic1, 0x4b);
-    assert.equal(firstFrame?.version, 1);
-    assert.equal(firstFrame?.frameType, 1);
+    assert.equal(firstFrame?.frameType, 1); // CHUNK
   }
 
   // No error should have been posted.
@@ -857,21 +863,18 @@ test('service worker sends screenshot via stream and verifies capture', async ()
 test('service worker reports screenshot.error when stream binary send fails', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
-  const listener = findBleCommandListener(harness.runtimeListeners);
+  const listener = findBleCommandListener(harness.runtimeListeners, harness);
   harness.setBlePostBinaryOk(false);
 
-  await callBleCommand(listener, {
+  const { response } = await callBleCommand(listener, {
     type: 'screenshot.request',
     request_id: 'shot-nack',
     source: 'desktop',
     max_chars: 20000
   });
 
-  const errorPayload = harness.postedPayloads.find((entry) => (
-    entry?.type === 'screenshot.error'
-    && entry?.request_id === 'shot-nack'
-  ));
-  assert.ok(errorPayload, 'screenshot error posted when stream binary send fails');
-  assert.ok(errorPayload.error.includes('chunk_send_failed') || errorPayload.error.includes('binary_send_failed'),
-    'error detail references binary send failure');
+  // When binary send fails, both the response and error paths fail through halfpipe.
+  // The error propagates back as a failed ble.command response.
+  assert.equal(response?.ok, false);
+  assert.equal(typeof response?.error, 'string');
 });

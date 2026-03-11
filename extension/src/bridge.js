@@ -345,7 +345,15 @@ export async function connectBle(deps = {}) {
       if (!value) return;
       const raw = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
       debugVerbose('rx notify', { bytes: raw.length, hex: bytesToHex(raw) });
-      onBleBytes(decoder.decode(value), deps.onCommand || commandHandler);
+
+      // Forward raw bytes to service worker for v2 binary frame extraction
+      const onCmd = deps.onCommand || commandHandler;
+      if (typeof onCmd === 'function') {
+        onCmd({ type: '__ble_raw_bytes', bytes: Array.from(raw) });
+      }
+
+      // Keep existing text/JSON path for backward compat during transition
+      onBleBytes(decoder.decode(value), onCmd);
     });
   }
   if (typeof txCharacteristic?.startNotifications === 'function') {

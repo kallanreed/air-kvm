@@ -477,7 +477,9 @@ test('connectBle recovers parser after malformed control line and delivers next 
     }
   });
 
-  assert.equal(commands.length, 1);
-  assert.equal(commands[0]?.type, 'transfer.reset');
-  assert.equal(commands[0]?.request_id, 'reset-1');
+  // Filter out __ble_raw_bytes forwarding (v2 binary frame path)
+  const jsonCommands = commands.filter((c) => c?.type !== '__ble_raw_bytes');
+  assert.equal(jsonCommands.length, 1);
+  assert.equal(jsonCommands[0]?.type, 'transfer.reset');
+  assert.equal(jsonCommands[0]?.request_id, 'reset-1');
 });
