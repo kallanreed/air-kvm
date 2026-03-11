@@ -382,3 +382,183 @@ test('stream: streamRequest timeout surfaces as transport_error', async () => {
   assert.equal(payload.error, 'transport_error');
   assert.equal(payload.detail, 'device_timeout');
 });
+
+// --- Half-pipe path tests (transport.sendRequest / sendControlCommand) ---
+
+test('halfpipe: airkvm_list_tabs uses sendRequest when available', async () => {
+  const sent = [];
+  const transport = {
+    sendRequest: async (command) => ({
+      type: 'tabs.list',
+      request_id: command.request_id,
+      tabs: [{ id: 1, title: 'Test' }]
+    }),
+    sendCommand: async () => { throw new Error('should not use old path'); },
+  };
+  const server = createServer({ transport, send: (msg) => sent.push(msg) });
+  server.handleRequest({
+    jsonrpc: '2.0', id: 1,
+    method: 'tools/call',
+    params: { name: 'airkvm_list_tabs', arguments: { request_id: 'req-1' } }
+  });
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].isError, undefined);
+  const result = JSON.parse(sent[0].result.content[0].text);
+  assert.equal(result.request_id, 'req-1');
+  assert.deepEqual(result.tabs, [{ id: 1, title: 'Test' }]);
+});
+
+test('halfpipe: airkvm_send uses sendControlCommand when available', async () => {
+  const sent = [];
+  const transport = {
+    sendControlCommand: async () => ({ ok: true, msg: { ok: true } }),
+    sendCommand: async () => { throw new Error('should not use old path'); },
+  };
+  const server = createServer({ transport, send: (msg) => sent.push(msg) });
+  server.handleRequest({
+    jsonrpc: '2.0', id: 1,
+    method: 'tools/call',
+    params: { name: 'airkvm_send', arguments: { command: { type: 'key.tap', key: 'Enter' } } }
+  });
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].isError, undefined);
+});
+
+test('halfpipe: airkvm_dom_snapshot uses sendRequest', async () => {
+  const sent = [];
+  const transport = {
+    sendRequest: async (command) => ({
+      type: 'dom.snapshot',
+      request_id: command.request_id,
+      html: '<h1>hello</h1>',
+      title: 'Test Page'
+    }),
+  };
+  const server = createServer({ transport, send: (msg) => sent.push(msg) });
+  server.handleRequest({
+    jsonrpc: '2.0', id: 2,
+    method: 'tools/call',
+    params: { name: 'airkvm_dom_snapshot', arguments: { request_id: 'dom-hp-1' } }
+  });
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].isError, undefined);
+  const payload = JSON.parse(sent[0].result.content[0].text);
+  assert.equal(payload.request_id, 'dom-hp-1');
+  assert.equal(payload.snapshot.html, '<h1>hello</h1>');
+});
+
+test('halfpipe: airkvm_screenshot_tab uses sendRequest', async () => {
+  const sent = [];
+  const transport = {
+    sendRequest: async (command) => ({
+      type: 'screenshot.response',
+      request_id: command.request_id,
+      source: 'tab',
+      mime: 'image/jpeg',
+      data: '/9j/fakebase64'
+    }),
+  };
+  const server = createServer({ transport, send: (msg) => sent.push(msg) });
+  server.handleRequest({
+    jsonrpc: '2.0', id: 3,
+    method: 'tools/call',
+    params: {
+      name: 'airkvm_screenshot_tab',
+      arguments: { request_id: 'shot-hp-1', max_width: 800, max_height: 600, quality: 0.5 }
+    }
+  });
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].isError, undefined);
+  const payload = JSON.parse(sent[0].result.content[0].text);
+  assert.equal(payload.request_id, 'shot-hp-1');
+  assert.equal(payload.mime, 'image/jpeg');
+  assert.equal(payload.base64, '/9j/fakebase64');
+});
+
+test('halfpipe: airkvm_exec_js_tab uses sendRequest', async () => {
+  const sent = [];
+  const transport = {
+    sendRequest: async (command) => ({
+      type: 'js.exec.result',
+      request_id: command.request_id,
+      tab_id: 2,
+      duration_ms: 5,
+      value_type: 'string',
+      value_json: '"hello"',
+      truncated: false
+    }),
+  };
+  const server = createServer({ transport, send: (msg) => sent.push(msg) });
+  server.handleRequest({
+    jsonrpc: '2.0', id: 4,
+    method: 'tools/call',
+    params: {
+      name: 'airkvm_exec_js_tab',
+      arguments: { request_id: 'js-hp-1', script: 'return "hello"' }
+    }
+  });
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].isError, undefined);
+  const payload = JSON.parse(sent[0].result.content[0].text);
+  assert.equal(payload.type, 'js.exec.result');
+  assert.equal(payload.value_json, '"hello"');
+});
+
+test('halfpipe: sendRequest error surfaces as transport_error', async () => {
+  const sent = [];
+  const transport = {
+    sendRequest: async () => { throw new Error('device_timeout'); },
+  };
+  const server = createServer({ transport, send: (msg) => sent.push(msg) });
+  server.handleRequest({
+    jsonrpc: '2.0', id: 5,
+    method: 'tools/call',
+    params: { name: 'airkvm_dom_snapshot', arguments: { request_id: 'dom-err-1' } }
+  });
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].isError, true);
+  const payload = JSON.parse(sent[0].result.content[0].text);
+  assert.equal(payload.error, 'transport_error');
+  assert.equal(payload.detail, 'device_timeout');
+});
+
+test('halfpipe: sendRequest error response from device', async () => {
+  const sent = [];
+  const transport = {
+    sendRequest: async () => ({ ok: false, error: 'no_tab', request_id: 'dom-dev-err' }),
+  };
+  const server = createServer({ transport, send: (msg) => sent.push(msg) });
+  server.handleRequest({
+    jsonrpc: '2.0', id: 6,
+    method: 'tools/call',
+    params: { name: 'airkvm_dom_snapshot', arguments: { request_id: 'dom-dev-err' } }
+  });
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].isError, true);
+  const payload = JSON.parse(sent[0].result.content[0].text);
+  assert.equal(payload.error, 'no_tab');
+});
+
+test('halfpipe: sendControlCommand rejection surfaces as device rejected', async () => {
+  const sent = [];
+  const transport = {
+    sendControlCommand: async () => ({ ok: false, msg: { ok: false, error: 'invalid_key' } }),
+  };
+  const server = createServer({ transport, send: (msg) => sent.push(msg) });
+  server.handleRequest({
+    jsonrpc: '2.0', id: 7,
+    method: 'tools/call',
+    params: { name: 'airkvm_send', arguments: { command: { type: 'key.tap', key: 'Enter' } } }
+  });
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].isError, true);
+  assert.ok(sent[0].result.content[0].text.includes('device rejected'));
+});

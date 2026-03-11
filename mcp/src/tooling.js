@@ -208,6 +208,7 @@ function isCorrelatedDeviceRejection(msg, requestId) {
   return typeof msgRequestId === 'string' && msgRequestId === requestId;
 }
 
+// @deprecated – Retained for backward-compat tests. New bridge tools use half-pipe sendRequest.
 export function createResponseCollector(name, command) {
   if (name === 'airkvm_list_tabs') {
     const requestId = command.request_id;

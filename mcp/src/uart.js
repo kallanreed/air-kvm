@@ -1,5 +1,7 @@
 import { SerialPort } from 'serialport';
 import { tryExtractFrameFromBuffer, kMagic0, kMagic1 } from './binary_frame.js';
+import { tryExtractV2Frame, encodeControlFrameV2 } from './binary_frame.js';
+import { HalfPipe } from './halfpipe.js';
 import { StreamSender, StreamReceiver } from './stream.js';
 
 export function parseDeviceLine(line) {
@@ -39,6 +41,7 @@ export class UartTransport {
     this.sendQueue = Promise.resolve();
     this.opened = false;
     this.recentFrames = [];
+    this.halfpipe = null;
   }
 
   async open() {
@@ -64,6 +67,20 @@ export class UartTransport {
       this.log(`serial error: ${error?.message || error}`);
     });
     this.opened = true;
+
+    if (!this.halfpipe) {
+      this.halfpipe = new HalfPipe({
+        writeFn: async (frameBytes) => {
+          await new Promise((resolve, reject) => {
+            this.serialPort.write(frameBytes, (err) => {
+              if (err) reject(err);
+              else this.serialPort.drain((drainErr) => (drainErr ? reject(drainErr) : resolve()));
+            });
+          });
+        },
+        log: (msg) => this.log(`[halfpipe] ${msg}`),
+      });
+    }
   }
 
   log(msg) {
@@ -99,34 +116,47 @@ export class UartTransport {
     while (this.readBuffer.length > 0) {
       if (this.readBuffer[0] !== kMagic0) {
         const nextMagic = this.readBuffer.indexOf(kMagic0, 1);
-        if (nextMagic === -1) {
-          this.readBuffer = Buffer.alloc(0);
-          break;
-        }
+        if (nextMagic === -1) { this.readBuffer = Buffer.alloc(0); break; }
         this.readBuffer = this.readBuffer.subarray(nextMagic);
         continue;
       }
-      if (this.readBuffer.length < 2) {
-        break;
-      }
+      if (this.readBuffer.length < 2) break;
       if (this.readBuffer[1] !== kMagic1) {
         this.readBuffer = this.readBuffer.subarray(1);
         continue;
       }
 
-      const maybeFrame = tryExtractFrameFromBuffer(this.readBuffer);
-      if (!maybeFrame) {
-        break;
+      // Try v2 extraction first
+      const v2Result = tryExtractV2Frame(this.readBuffer);
+      if (v2Result && v2Result.frame.type !== 'error') {
+        // Valid v2 frame — route to half-pipe
+        this.readBuffer = this.readBuffer.subarray(v2Result.consumed);
+        if (this.halfpipe) {
+          this.halfpipe.onFrame(v2Result.frame);
+        }
+        continue;
       }
-      this.readBuffer = this.readBuffer.subarray(maybeFrame.consumed);
-      const frame = maybeFrame.frame;
-      this.recentFrames.push(frame);
-      if (this.recentFrames.length > 200) {
-        this.recentFrames.shift();
+
+      // v2 failed or CRC mismatch — try v1 extraction (backward compat)
+      const v1Result = tryExtractFrameFromBuffer(this.readBuffer);
+      if (v1Result) {
+        this.readBuffer = this.readBuffer.subarray(v1Result.consumed);
+        const frame = v1Result.frame;
+        this.recentFrames.push(frame);
+        if (this.recentFrames.length > 200) this.recentFrames.shift();
+        if (this.currentWaiter) this.currentWaiter.onFrame(frame);
+        continue;
       }
-      if (this.currentWaiter) {
-        this.currentWaiter.onFrame(frame);
+
+      // If v2 returned an error frame (bad CRC) and v1 also failed,
+      // consume the bad v2 bytes to avoid infinite loop
+      if (v2Result) {
+        this.readBuffer = this.readBuffer.subarray(v2Result.consumed);
+        continue;
       }
+
+      // Neither v2 nor v1 could extract — need more data
+      break;
     }
   }
 
@@ -443,6 +473,75 @@ export class UartTransport {
     return scheduled;
   }
 
+  // Send a command via half-pipe and wait for the response message.
+  // Used for all bridge tools (dom_snapshot, screenshot, js_exec, etc.)
+  async sendRequest(command, { timeoutMs = 30000 } = {}) {
+    await this.open();
+    return new Promise((resolve, reject) => {
+      let timer = null;
+      let done = false;
+      const finish = (fn, val) => {
+        if (done) return;
+        done = true;
+        if (timer) clearTimeout(timer);
+        fn(val);
+      };
+
+      timer = setTimeout(() => {
+        this.log(`sendRequest timeout command=${JSON.stringify(command)}`);
+        finish(reject, new Error('device_timeout'));
+      }, timeoutMs);
+
+      const prevCb = this.halfpipe._messageCb;
+      this.halfpipe.onMessage((msg) => {
+        finish(resolve, msg);
+        this.halfpipe.onMessage(prevCb);
+      });
+
+      this.halfpipe.send(command).catch((err) => {
+        this.halfpipe.onMessage(prevCb);
+        finish(reject, err);
+      });
+    });
+  }
+
+  // Send a firmware-local command as an AK control frame.
+  // Used for airkvm_send (HID commands).
+  async sendControlCommand(command, { timeoutMs = this.commandTimeoutMs } = {}) {
+    await this.open();
+    return new Promise((resolve, reject) => {
+      let timer = null;
+      let done = false;
+      const finish = (fn, val) => {
+        if (done) return;
+        done = true;
+        if (timer) clearTimeout(timer);
+        fn(val);
+      };
+
+      timer = setTimeout(() => {
+        this.log('sendControlCommand timeout');
+        finish(reject, new Error('device_timeout'));
+      }, timeoutMs);
+
+      const prevCb = this.halfpipe._controlCb;
+      this.halfpipe.onControl((msg) => {
+        if (this.shouldResolveForCommand(command, msg)) {
+          this.halfpipe.onControl(prevCb);
+          finish(resolve, { ok: msg.ok !== false, msg });
+        }
+      });
+
+      const frameBytes = encodeControlFrameV2(command);
+      this.serialPort.write(frameBytes, (err) => {
+        if (err) { finish(reject, err); return; }
+        this.serialPort.drain((drainErr) => {
+          if (drainErr) finish(reject, drainErr);
+        });
+      });
+    });
+  }
+
   close() {
     if (this.currentWaiter) {
       this.currentWaiter.reject(new Error('transport_closed'));
@@ -450,6 +549,10 @@ export class UartTransport {
     }
     if (this.serialPort?.isOpen) {
       this.serialPort.close(() => {});
+    }
+    if (this.halfpipe) {
+      this.halfpipe.close();
+      this.halfpipe = null;
     }
     this.serialPort = null;
     this.readBuffer = '';

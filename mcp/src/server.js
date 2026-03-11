@@ -14,8 +14,6 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const kTempDir = path.resolve(__dirname, '../../temp');
-const kJsExecInlineMaxBytes = 4096;
-const kJsExecStreamTimeoutMs = 30000;
 
 function makeToolResultText(text) {
   return { content: [{ type: 'text', text }] };
@@ -118,131 +116,175 @@ export function createServer({ transport, send }) {
       return;
     }
 
-    const line = toDeviceLine(command).trim();
-    const isStreamOnlyTool = (
-      name === 'airkvm_dom_snapshot' ||
-      name === 'airkvm_screenshot_tab' ||
-      name === 'airkvm_screenshot_desktop'
-    );
-    if (isStreamOnlyTool && typeof transport.streamRequest !== 'function') {
-      send({
-        jsonrpc: '2.0',
-        id,
-        result: makeToolResultJson({
-          request_id: command.request_id || null,
-          error: 'stream_transport_required',
-          detail: `${name} requires transport.streamRequest`
-        }),
-        isError: true
-      });
-      return;
-    }
-    const useStream = isStreamOnlyTool;
+    // airkvm_send: firmware-local HID command
+    if (name === 'airkvm_send') {
+      const runFirmwareLocal = typeof transport.sendControlCommand === 'function'
+        ? transport.sendControlCommand(command)
+        : transport.sendCommand(command);
 
-    const runTransport = (() => {
-      if (useStream) {
-        const timeoutMs = name === 'airkvm_dom_snapshot' ? 60000 : 30000;
-        return transport.streamRequest(command, { timeoutMs }).then((result) => {
-          const msg = result.data;
-          if (!msg || msg.ok === false || msg.type === 'dom.snapshot.error' || msg.type === 'screenshot.error') {
-            return { ok: false, data: { request_id: command.request_id, error: msg?.error || 'device_error', detail: msg } };
-          }
-          if (name === 'airkvm_dom_snapshot') {
-            return { ok: true, data: { request_id: command.request_id, snapshot: msg } };
-          }
-          // Screenshot — normalize the response shape for maybePersistScreenshot.
-          return {
-            ok: true,
-            data: {
-              request_id: command.request_id,
-              source: msg.source || command.source,
-              mime: msg.mime || 'image/jpeg',
-              base64: msg.data || msg.base64 || '',
-            },
-          };
-        });
-      }
-      const responseCollector = createResponseCollector(name, command);
-      if (name !== 'airkvm_exec_js_tab') {
-        return transport.sendCommand(command, responseCollector);
-      }
-      const serializedBytes = Buffer.byteLength(JSON.stringify(command), 'utf8');
-      if (serializedBytes <= kJsExecInlineMaxBytes) {
-        return transport.sendCommand(command, responseCollector);
-      }
-      if (typeof transport.streamSendCommand === 'function') {
-        return transport.streamSendCommand(command, responseCollector, { timeoutMs: kJsExecStreamTimeoutMs });
-      }
-      // Fallback: send inline and hope firmware buffer can handle it.
-      return transport.sendCommand(command, responseCollector);
-    })();
-
-    runTransport.then((result) => {
-      if (isStructuredTool(name)) {
-        if (result.ok === false) {
+      runFirmwareLocal.then((result) => {
+        const isExplicitRejection = result?.msg && result.ok === false;
+        if (isExplicitRejection) {
+          const line = toDeviceLine(command).trim();
           send({
             jsonrpc: '2.0',
             id,
-            result: makeToolResultJson(result.data || { error: 'request_failed' }),
+            result: makeToolResultText(`device rejected ${line}: ${JSON.stringify(result.msg)}`),
             isError: true
           });
           return;
         }
+        const line = toDeviceLine(command).trim();
+        const isStateResponse = result?.msg?.type === 'state' && typeof result?.msg?.busy === 'boolean';
+        if (command.type === 'state.request' && isStateResponse) {
+          send({
+            jsonrpc: '2.0',
+            id,
+            result: makeToolResultText(`forwarded ${line}; state=${JSON.stringify(result.msg)}`)
+          });
+          return;
+        }
+        send({ jsonrpc: '2.0', id, result: makeToolResultText(`forwarded ${line}`) });
+      }).catch((err) => {
         send({
           jsonrpc: '2.0',
           id,
-          result: makeToolResultJson(maybePersistScreenshot(name, result.data || { ok: true }))
-        });
-        return;
-      }
-      const isStateResponse = result?.msg?.type === 'state' && typeof result?.msg?.busy === 'boolean';
-      const isExplicitRejection = result?.msg && result.ok === false;
-      if (isExplicitRejection) {
-        send({
-          jsonrpc: '2.0',
-          id,
-          result: makeToolResultText(`device rejected ${line}: ${JSON.stringify(result.msg)}`),
+          result: makeToolResultText(`transport error: ${err.message}`),
           isError: true
         });
-        return;
-      }
-      if (command.type === 'state.request' && isStateResponse) {
-        send({
-          jsonrpc: '2.0',
-          id,
-          result: makeToolResultText(`forwarded ${line}; state=${JSON.stringify(result.msg)}`)
-        });
-        return;
-      }
-      send({
-        jsonrpc: '2.0',
-        id,
-        result: makeToolResultText(`forwarded ${line}`)
       });
-    }).catch((err) => {
-      const diagnostics = buildDiagnostics(err);
-      if (isStructuredTool(name)) {
+      return;
+    }
+
+    // All other tools: bridge via half-pipe
+    const timeoutMs = name === 'airkvm_dom_snapshot' ? 60000
+      : (name === 'airkvm_screenshot_tab' || name === 'airkvm_screenshot_desktop') ? 30000
+      : 30000;
+
+    const runBridge = typeof transport.sendRequest === 'function'
+      ? transport.sendRequest(command, { timeoutMs })
+      : (() => {
+        // Fallback to old transport paths for backward compat
+        const isStreamOnlyTool = (
+          name === 'airkvm_dom_snapshot' ||
+          name === 'airkvm_screenshot_tab' ||
+          name === 'airkvm_screenshot_desktop'
+        );
+        if (isStreamOnlyTool) {
+          if (typeof transport.streamRequest !== 'function') {
+            return Promise.resolve({
+              __fallback_error: true,
+              error: 'stream_transport_required',
+              detail: `${name} requires transport.streamRequest`
+            });
+          }
+          return transport.streamRequest(command, { timeoutMs }).then((result) => {
+            const msg = result.data;
+            if (!msg || msg.ok === false || msg.type === 'dom.snapshot.error' || msg.type === 'screenshot.error') {
+              return { __fallback_structured: true, ok: false, data: { request_id: command.request_id, error: msg?.error || 'device_error', detail: msg } };
+            }
+            if (name === 'airkvm_dom_snapshot') {
+              return { __fallback_structured: true, ok: true, data: { request_id: command.request_id, snapshot: msg } };
+            }
+            return {
+              __fallback_structured: true, ok: true,
+              data: {
+                request_id: command.request_id,
+                source: msg.source || command.source,
+                mime: msg.mime || 'image/jpeg',
+                base64: msg.data || msg.base64 || '',
+              },
+            };
+          });
+        }
+        const responseCollector = createResponseCollector(name, command);
+        if (name === 'airkvm_exec_js_tab') {
+          const serializedBytes = Buffer.byteLength(JSON.stringify(command), 'utf8');
+          if (serializedBytes > 4096 && typeof transport.streamSendCommand === 'function') {
+            return transport.streamSendCommand(command, responseCollector, { timeoutMs: 30000 }).then((result) => {
+              return { __fallback_structured: true, ok: result.ok, data: result.data };
+            });
+          }
+        }
+        return transport.sendCommand(command, responseCollector).then((result) => {
+          return { __fallback_structured: true, ok: result.ok, data: result.data };
+        });
+      })();
+
+    runBridge.then((msg) => {
+      // Handle fallback error from missing streamRequest
+      if (msg?.__fallback_error) {
         send({
-          jsonrpc: '2.0',
-          id,
+          jsonrpc: '2.0', id,
           result: makeToolResultJson({
             request_id: command.request_id || null,
-            error: 'transport_error',
-            detail: err.message,
-            diagnostics
+            error: msg.error,
+            detail: msg.detail
           }),
           isError: true
         });
         return;
       }
+
+      // Handle fallback structured response from old transport
+      if (msg?.__fallback_structured) {
+        if (msg.ok === false) {
+          send({
+            jsonrpc: '2.0', id,
+            result: makeToolResultJson(msg.data || { error: 'request_failed' }),
+            isError: true
+          });
+          return;
+        }
+        send({
+          jsonrpc: '2.0', id,
+          result: makeToolResultJson(maybePersistScreenshot(name, msg.data || { ok: true }))
+        });
+        return;
+      }
+
+      // Half-pipe path: msg is the complete deserialized response
+      if (!msg || msg.ok === false || msg.error) {
+        send({
+          jsonrpc: '2.0', id,
+          result: makeToolResultJson({
+            request_id: command.request_id || null,
+            error: msg?.error || 'device_error',
+            detail: msg
+          }),
+          isError: true
+        });
+        return;
+      }
+
+      let data;
+      if (name === 'airkvm_dom_snapshot') {
+        data = { request_id: command.request_id, snapshot: msg };
+      } else if (isScreenshotTool(name)) {
+        data = {
+          request_id: command.request_id,
+          source: msg.source || command.source,
+          mime: msg.mime || 'image/jpeg',
+          base64: msg.data || msg.base64 || '',
+        };
+      } else {
+        data = msg;
+      }
+
       send({
-        jsonrpc: '2.0',
-        id,
-        result: makeToolResultText(
+        jsonrpc: '2.0', id,
+        result: makeToolResultJson(maybePersistScreenshot(name, data))
+      });
+    }).catch((err) => {
+      const diagnostics = buildDiagnostics(err);
+      send({
+        jsonrpc: '2.0', id,
+        result: makeToolResultJson({
+          request_id: command.request_id || null,
+          error: 'transport_error',
+          detail: err.message,
           diagnostics
-            ? `transport error: ${err.message}; diagnostics=${JSON.stringify(diagnostics)}`
-            : `transport error: ${err.message}`
-        ),
+        }),
         isError: true
       });
     });
