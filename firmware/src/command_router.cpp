@@ -158,7 +158,6 @@ bool CommandRouter::HandleCommand(const airkvm::Command& cmd, const char* source
       if (from_ble) {
         transport_.EmitControlUartOnly(cmd.raw.c_str());
       } else {
-        transport_.EmitControlUartOnly(cmd.raw.c_str());
         const auto forwarded = transport_.ForwardControlToBle(cmd.raw.c_str());
         if (forwarded != TransportMux::BleForwardResult::kSent) {
           const String request_id = String(cmd.request_id.c_str());
