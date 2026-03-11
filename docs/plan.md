@@ -12,11 +12,11 @@ Maintain a reliable remote-control and browser-automation stack where:
 
 ### Firmware
 - BLE UART-style GATT service is active (`6E400101-...`) with device name `air-kvm-ctrl-cb01`.
-- Command router supports pass-through for `dom.snapshot`, `tabs.list`, `screenshot`, and `stream.*` control messages.
+- Command router supports pass-through for `dom.snapshot`, `tabs.list`, `screenshot`, and AK frame forwarding.
 - UART output is framed binary (`AK`) for control/log/binary payloads.
 - Single deterministic UART TX writer path is enforced on ESP32 (queue + TX task).
 - BLE RX queue remains the required BLE->UART serialization path.
-- Stream ack generation: after forwarding binary chunk to UART, firmware sends `stream.ack` back on BLE.
+- Stream ack generation: after forwarding binary chunk to UART, firmware sends ack (`0x04`) frame back on BLE.
 - HID enabled by default (`AIRKVM_ENABLE_HID=1`) with security mode 1.
 - `key.type` supports escape sequences: `\n`, `\t`, `\\`, `{Enter}`, `{Tab}`, `{Escape}`, `{Backspace}`, `{Delete}`, `{Up/Down/Left/Right}`.
 - All legacy `transfer.*` command types removed from protocol/parser/router.
@@ -24,20 +24,18 @@ Maintain a reliable remote-control and browser-automation stack where:
 ### MCP
 - Structured tools: `airkvm_send`, `airkvm_list_tabs`, `airkvm_open_tab`, `airkvm_dom_snapshot`, `airkvm_exec_js_tab`, `airkvm_screenshot_tab`, `airkvm_screenshot_desktop`.
 - UART parser supports mixed framed stream (`ctrl`, `log`, `bin`, and `bin_error`).
-- `streamRequest()`: receives chunked binary responses (screenshots, DOM) via StreamReceiver.
-- `streamSendCommand()`: sends large js.exec scripts as JSON-based `stream.data` chunks via StreamSender.
-- `_collectFrames()`: shared frame-collection loop used by all transport methods (deduped from sendCommand/waitForFrame).
+- `sendRequest()`: sends commands and receives responses via HalfPipe transport (AK frame v2 binary chunking).
+- `sendControlCommand()`: sends control commands via HalfPipe transport.
 - Stream observability: UART debug logging for stream start/complete/error/timeout events.
 - Old dom_snapshot and binary_screenshot collectors removed — stream path is now required.
 
 ### Extension
 - BLE bridge page is the primary BLE runtime path.
 - Service worker handles all browser automation commands.
-- StreamSender: sends screenshots and DOM snapshots as AK binary chunk frames.
-- StreamReceiver: receives large js.exec commands via `stream.data` JSON chunks dispatched through normal handler system.
-- `stream.ack/nack/reset/data` handlers in `kBleCommandHandlers`.
+- Half-pipe transport (HalfPipe class): sends screenshots and DOM snapshots, receives commands — all via AK frame v2 binary chunks with `send(obj)`/`onMessage(cb)` API.
+- Binary AK frame v2 routing via `halfpipe.onFrame()` for ack/nack/reset handling.
 - `bleWrite()` helper consolidates postEvent/postBinary telemetry boilerplate.
-- All legacy inbound transfer code removed (inboundScriptTransfers, transfer.meta/chunk/done handlers).
+- All legacy inbound transfer code removed (inboundScriptTransfers, old transfer handlers).
 
 ## Known Issues
 
@@ -51,30 +49,31 @@ Maintain a reliable remote-control and browser-automation stack where:
 
 ### Design
 
-Two independent streams with firmware bridging between them:
+Two independent half-pipes with firmware bridging between them:
 
 ```
 MCP app code                                    Extension app code
-    │  stream.send(obj)                             │  stream.onMessage(obj)
+    │  send(obj)                                   │  onMessage(obj)
     ▼                                               ▲
 ┌──────────────┐                               ┌──────────────┐
-│ Stream Layer │  (MCP side)                   │ Stream Layer │  (Extension side)
+│  Half-Pipe   │  (MCP side)                   │  Half-Pipe   │  (Extension side)
 │  chunk/ack   │                               │  reassemble  │
 └──────┬───────┘                               └──────▲───────┘
        │ UART                                         │ BLE
 ┌──────▼──────────────────────────────────────────────┴───────┐
 │                        Firmware                              │
 │   Ext→MCP: binary chunk on BLE → forward to UART → ack BLE  │
-│   MCP→Ext: JSON on UART → forward to BLE (pass-through)     │
+│   MCP→Ext: AK frame on UART → forward to BLE                │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 **Key principles:**
+- Two independent half-pipes with firmware bridging between them:
 - App code never thinks about chunking or payload size.
 - One chunk in flight at a time per stream. Firmware backpressure is the flow control.
 - Firmware acks the sender only after confirmed delivery to the other side.
 - The firmware never buffers more than one chunk — can't overrun.
-- Two chunking modes: binary (extension→MCP) and JSON/base64 (MCP→extension).
+- Single binary AK frame v2 chunking mode for all directions.
 
 ### Wire Protocol
 
@@ -84,21 +83,18 @@ See `docs/protocol.md` for full specification.
 
 #### Phase 1 — Stream layer in MCP and extension ✅
 #### Phase 2 — Firmware stream awareness ✅
-#### Phase 3 — Migrate dom/screenshot/large-js.exec to stream ✅ (partial)
+#### Phase 3 — Migrate dom/screenshot/large-js.exec to stream ✅
 
-- DOM snapshot and screenshot via StreamSender/StreamReceiver (binary chunks)
-- js.exec script upload via StreamSender JSON-only mode (`stream.data` chunks)
-- **Incomplete**: only dom/screenshot responses and js.exec >4096 bytes migrated.
-  All other commands and responses still sent inline, breaking on BLE MTU (~160 bytes).
+- DOM snapshot, screenshot, and js.exec all use half-pipe transport (AK frame v2 binary chunks).
+- All commands and responses go through half-pipe — no inline size thresholds.
 
 #### Phase 4 — Legacy cleanup ✅
 
 - Removed all legacy transfer code from extension (~500 lines total)
 - Removed all `transfer.*` types from firmware protocol/parser/router
 - Removed old MCP collectors for dom_snapshot/screenshot (~590 lines)
-- Deduplicated sendCommand/waitForFrame into `_collectFrames()`
+- Removed old `StreamSender`/`StreamReceiver`, v1 `binary_frame.js`, collector infrastructure
 - Extracted `bleWrite()` helper in bridge.js
-- Documented binary_frame.js payload divergence
 - Updated `docs/protocol.md` and `docs/architecture.md`
 
 ---
@@ -107,10 +103,9 @@ See `docs/protocol.md` for full specification.
 
 ### Problem
 
-The current transport has multiple code paths (`sendCommand`, `streamSendCommand`,
-`streamRequest`, collectors) with per-tool routing and size thresholds. Payloads
-exceeding BLE MTU silently break. The stream protocol uses expensive JSON for acks
-and `stream.data` envelopes.
+The old transport had multiple code paths with per-tool routing and size thresholds. Payloads
+exceeding BLE MTU silently broke. The stream protocol used expensive JSON for acks
+and data envelopes. All of this has been replaced by the half-pipe design below.
 
 ### Design
 
@@ -125,83 +120,51 @@ See `docs/protocol.md` §5–§6 for full spec. Summary:
 - **`len < 255`** signals final chunk. Exact multiples send `len=0` terminator.
 - **Reset always gets through** — never queued behind data, works from any state.
 
-### Phase 5 — AK frame v2 codec ⬜
+### Phase 5 — AK frame v2 codec ✅
 
-New `binary_frame.js` (shared or mirrored for MCP/extension) implementing v2:
+Implemented `binary_frame.js` (shared for MCP/extension) with v2 format:
 - `encodeFrame(type, transferId, seq, payload)` → Uint8Array/Buffer
 - `decodeFrame(bytes)` → `{type, transferId, seq, payload}` or null
-- CRC32 encode/verify
-- All six frame types supported
-- Remove v1 codec
+- CRC32 encode/verify, all six frame types supported
+- v1 codec removed
 
 **Files**: `mcp/src/binary_frame.js`, `extension/src/binary_frame.js`
 
-**Validation**: Unit tests for encode/decode round-trip, CRC validation, all
-frame types, edge cases (len=0 terminator, max payload, bad CRC).
+### Phase 6 — MCP half-pipe transport ✅
 
-### Phase 6 — MCP half-pipe transport ⬜
-
-Build the MCP-side half-pipe:
+MCP-side HalfPipe implemented:
 - `send(obj)` → JSON serialize → chunk into AK v2 frames → write to UART →
   wait for ack per chunk → resolve when complete
-- `onMessage(cb)` → receive AK frames from UART → reassemble chunks by
-  transfer_id/seq → parse JSON → deliver to callback
-- One-send-at-a-time: queue subsequent sends behind current
-- Timeout: reject + clear state after configurable deadline
-- Reset: send reset frame, clear all local state, reject pending send
-- Incoming reset: clear reassembly state, forward to app if needed
-- Wire to UART serial read/write (replaces old `writeRawCommand` + frame parsing)
+- `onMessage(cb)` → receive AK frames → reassemble → parse JSON → deliver
+- One-send-at-a-time, timeout rejection, reset clears state
 
-**Files**: `mcp/src/halfpipe.js` (new), `mcp/src/uart.js` (rewire)
+**Files**: `mcp/src/halfpipe.js`, `mcp/src/uart.js`
 
-**Validation**: `cd mcp && node --test` — new half-pipe tests for:
-send small (single chunk), send large (multi-chunk), one-at-a-time enforcement,
-timeout rejection, reset clears state, onMessage reassembly, ack/nack handling.
+### Phase 7 — MCP server uses half-pipe ✅
 
-### Phase 7 — MCP server uses half-pipe ⬜
+- All transport routing replaced with `transport.send(command)` + `transport.onMessage()` + `request_id` matching
+- Removed `sendCommand`, `streamSendCommand`, `streamRequest`, `createResponseCollector`, `kJsExecInlineMaxBytes`
+- Removed old `StreamSender`/`StreamReceiver` imports
 
-- Remove all transport routing logic from `server.js`
-- Remove `sendCommand`, `streamSendCommand`, `streamRequest` calls
-- Remove `kJsExecInlineMaxBytes`, `createResponseCollector`, inline vs stream decisions
-- All structured tools: `await transport.send(command)`, correlate response via
-  `transport.onMessage()` + `request_id` matching
-- `airkvm_send` (HID): still goes through firmware-local path (no BLE crossing)
-- Remove old `StreamSender`/`StreamReceiver` imports
+**Files**: `mcp/src/server.js`
 
-**Files**: `mcp/src/server.js`, `mcp/src/tooling.js` (remove collector infra)
+### Phase 8 — Extension half-pipe transport ✅
 
-**Validation**: `cd mcp && node --test` — all pass. Server tests updated for
-half-pipe transport mock.
-
-### Phase 8 — Extension half-pipe transport ⬜
-
-Build the extension-side half-pipe — same `send(obj)`/`onMessage(cb)` API:
-- `send(obj)` → JSON serialize → chunk → AK v2 frames → BLE bridge write →
-  ack-gated → resolve
+Extension-side HalfPipe implemented — same `send(obj)`/`onMessage(cb)` API:
+- `send(obj)` → JSON serialize → chunk → AK v2 frames → BLE bridge write → ack-gated → resolve
 - `onMessage(cb)` → receive AK frames from BLE bridge → reassemble → deliver
-- Same serialization, one-at-a-time, timeout, reset semantics as MCP side
-- Wire to BLE bridge IPC (`postBinaryViaBridge` for writes, bridge RX for reads)
 
-**Files**: `extension/src/halfpipe.js` (new), `extension/src/bridge.js` (rewire)
+**Files**: `extension/src/halfpipe.js`, `extension/src/bridge.js`
 
-**Validation**: `cd extension && node --test` — new half-pipe tests mirroring
-MCP side.
+### Phase 9 — Extension service worker uses half-pipe ✅
 
-### Phase 9 — Extension service worker uses half-pipe ⬜
-
-- All command handlers send responses via `transport.send()`:
-  `sendJsExec`, `sendTabsList`, `sendOpenTab`, `sendWindowBounds`,
-  `sendDomSnapshot`, `sendScreenshot` + all error paths
-- Inbound commands arrive via `transport.onMessage()` → dispatch to handlers
-- Remove `postEventViaBridge`/`StreamSender`/`StreamReceiver`/`kBleCommandHandlers`
-- Remove old `stream.ack/nack/reset/data` JSON handlers
+- All command handlers use `transport.send()` / `transport.onMessage()` → dispatch to handlers
+- Removed `postEventViaBridge`/`StreamSender`/`StreamReceiver`/`kBleCommandHandlers`
+- Removed old `stream.ack/nack/reset/data` JSON handlers
 
 **Files**: `extension/src/service_worker.js`
 
-**Validation**: `cd extension && node --test` — all pass. Service worker tests
-updated for half-pipe transport mock.
-
-### Phase 10 — Firmware: AK v2 bridge ⬜
+### Phase 10 — Firmware: AK v2 bridge ⬜ (NEXT)
 
 - UART reader: detect AK magic (`0x41 0x4B`) on serial input, switch to binary
   frame parsing (read by header length). Fall back to text line for non-AK input.
@@ -221,9 +184,7 @@ frame forwarding both directions, BLE size guard rejection, reset priority
 
 ### Phase 11 — Cleanup + E2E ⬜
 
-- Remove all dead code: old `StreamSender`/`StreamReceiver`, v1 `binary_frame.js`,
-  old transport methods, collector infrastructure, `stream.data` JSON path
-- Update `docs/architecture.md`
+- Update `docs/architecture.md` for any remaining stale references
 - `cd mcp && node --test && cd ../extension && node --test` — all pass
 - Smoke test with live hardware
 
@@ -237,6 +198,6 @@ frame forwarding both directions, BLE size guard rejection, reset priority
 
 ## Remaining Work
 
-1. **Stream-all migration** — Phases 5–10 above.
-2. **Build-verify firmware on ESP32** — Phase 2 stream changes, transfer removal, and Phase 9 size guard need compilation test.
+1. **Firmware AK v2 bridge** — Phase 10 above.
+2. **Build-verify firmware on ESP32** — Phase 10 AK v2 bridge and size guard need compilation test.
 3. **Documentation discipline** — any transport/protocol change must update `docs/protocol.md`, `docs/architecture.md`, and this file in the same PR.

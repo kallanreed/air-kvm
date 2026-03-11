@@ -7,13 +7,13 @@ AirKVM uses two independent transport segments bridged by the firmware:
 1. **MCP ↔ Firmware** over UART (wired)
    - Firmware emits framed binary packets (`AK` frames) for control, log, and binary chunk payloads.
    - MCP sends JSON text lines to UART; firmware reads and forwards to BLE.
-   - For large MCP→Extension payloads (e.g. js.exec scripts), the stream layer
-     sends `stream.data` JSON messages with base64-encoded chunks.
+   - Large MCP→Extension payloads (e.g. js.exec scripts) are sent as AK frame v2
+     binary chunks through the half-pipe transport.
 
 2. **Extension ↔ Firmware** over BLE UART-style GATT (wireless)
    - Control messages are JSON lines over BLE write/notify.
    - Large Extension→MCP payloads (screenshots, DOM snapshots) are sent as
-     AK binary chunk frames through the stream layer.
+     AK binary chunk frames through the half-pipe transport.
    - Firmware acks binary chunks back to the extension after forwarding to UART.
 
 ## 2) BLE GATT Profile
@@ -85,9 +85,9 @@ Unknown escape sequences and named keys are sent literally.
 {"ok":false,"error":"..."}
 ```
 
-## 5) Stream Layer
+## 5) Half-Pipe Transport Layer
 
-The stream layer provides transparent chunked transport for all messages crossing
+The half-pipe transport provides transparent chunked transport for all messages crossing
 the firmware bridge. App code calls `send(obj)` / `onMessage(cb)` without knowing
 about chunking, acking, or transport details.
 
@@ -159,7 +159,7 @@ mid-transfer, with full TX queue, and with BLE disconnected.
 1. Sender serializes `obj` to JSON bytes.
 2. If bytes fit in one chunk (≤ 255): send single AK frame with `len < 255`.
 3. If bytes exceed 255: split into 255-byte chunks, send sequentially.
-   - Each chunk waits for `stream.ack` before sending next.
+   - Each chunk waits for ack (`0x04`) before sending next.
    - Last chunk has `len < 255` (or `len == 0` terminator if exact multiple of 255).
 4. Receiver reassembles chunks in seq order, parses JSON, delivers via `onMessage`.
 
@@ -169,9 +169,9 @@ mid-transfer, with full TX queue, and with BLE disconnected.
 |---------|-----------|----------|
 | Chunk lost or corrupted | Sender timeout (3s) | Retransmit. Max 3 retries then reject |
 | BLE disconnect | Firmware detects | nack. On reconnect, retry |
-| Extension killed | Acks stop arriving | Sender timeout → `stream.reset` → fresh start |
-| Firmware reboots | Connection lost | On reconnect, `stream.reset` |
-| Permanent wedge | Retries exhausted | `stream.reset` → clear state → reject send |
+| Extension killed | Acks stop arriving | Sender timeout → reset (`0x06`) → fresh start |
+| Firmware reboots | Connection lost | On reconnect, reset (`0x06`) |
+| Permanent wedge | Retries exhausted | reset (`0x06`) → clear state → reject send |
 
 ## 6) AK Binary Frame Format
 
@@ -231,18 +231,9 @@ No separate "final" bit flag is needed.
 2-byte LE unsigned integer in the frame header. Random value per transfer.
 No string encoding — binary everywhere.
 
-### 6.5 Frame v1 (deprecated)
+### 6.5 Frame v1 (historical)
 
-The original frame format used a wider header:
-
-```
-[magic 2B] [version 1B] [type 1B] [transfer_id 4B LE] [seq 4B LE]
-[payload_len 2B LE] [payload] [crc32 4B LE]
-```
-
-18 bytes overhead. 4-byte transfer ID, 4-byte seq (with bit-31 final flag),
-2-byte payload_len. Superseded by v2 to reduce overhead and simplify
-end-of-transfer signaling.
+v1 frames are no longer used and all v1 code has been removed.
 
 ## 7) MCP Tool Contract
 

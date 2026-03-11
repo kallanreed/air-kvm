@@ -35,7 +35,7 @@ Status: Not started
    - `tab_targeting.js`
 2. [ ] Evaluate removal of legacy protocol branches:
    - MCP `legacy_ctrl` fallback in `mcp/src/uart.js`
-   - firmware parse branches for `screenshot.meta` / `screenshot.chunk`
+   - firmware parse branches for deprecated command types
 3. [ ] Add guardrail telemetry/assertions before removing legacy branches.
 4. [ ] Expand integration tests for transfer lifecycle and reconnect/resume behavior.
 

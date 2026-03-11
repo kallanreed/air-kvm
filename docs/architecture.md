@@ -27,7 +27,7 @@
 - Owns BLE GATT UART service (`6E400101-...`).
 - Routes command lines between BLE and UART (dumb pipe / bridge).
 - Emits UART framed packets (`AK` framing): chunk (`0x01`), control (`0x02`), log (`0x03`).
-- Generates `stream.ack` back to extension after forwarding binary chunks to UART.
+- Generates ack (`0x04`) frames back to extension after forwarding binary chunks to UART.
 - Never buffers more than one chunk — firmware backpressure is flow control.
 - BLE HID (HOGP) enabled by default (`AIRKVM_ENABLE_HID=1`), coexists with UART service.
 
@@ -38,53 +38,50 @@
   `airkvm_screenshot_desktop`.
 - Validates and forwards control commands to firmware via UART.
 - Parses mixed UART framed stream (control / log / binary).
-- **StreamReceiver**: reassembles chunked binary responses (screenshots, DOM) from extension.
-- **StreamSender** (JSON-only mode): sends large js.exec scripts as `stream.data` chunks.
-- Drives `stream.reset` as universal recovery mechanism.
+- **Half-pipe transport** (HalfPipe class): unified `send(obj)`/`onMessage(cb)` API for all message types, with automatic chunking via AK frame v2 binary frames.
+- Drives reset (`0x06`) as universal recovery mechanism.
 
 ### 3. Extension (`extension/`)
 
 - `service_worker.js`: handles browser automation (tabs, DOM, js.exec, screenshots).
-- **StreamSender**: sends screenshots and DOM snapshots as AK binary chunk frames.
-- **StreamReceiver**: receives large commands (js.exec) via `stream.data` JSON chunks.
+- **Half-pipe transport** (HalfPipe class): sends screenshots and DOM snapshots, receives commands (js.exec) — all via AK frame v2 binary chunks with `send(obj)`/`onMessage(cb)` API.
 - `ble_bridge.html` + `ble_bridge.js`: BLE runtime context (Web Bluetooth).
 - `bridge.js`: BLE transport helper with `bleWrite()` for write-with-fallback and telemetry.
 
-## Stream Layer
+## Half-Pipe Transport Layer
 
-Two independent streams with firmware bridging between them:
+Two independent half-pipes with firmware bridging between them:
 
 ```
 MCP app code                                    Extension app code
-    │  stream.send(obj)                             │  stream.onMessage(obj)
+    │  send(obj)                                   │  onMessage(obj)
     ▼                                               ▲
 ┌──────────────┐                               ┌──────────────┐
-│ Stream Layer │  (MCP side)                   │ Stream Layer │  (Extension side)
+│  Half-Pipe   │  (MCP side)                   │  Half-Pipe   │  (Extension side)
 │  chunk/ack   │                               │  reassemble  │
 └──────┬───────┘                               └──────▲───────┘
        │ UART                                         │ BLE
 ┌──────▼──────────────────────────────────────────────┴───────┐
 │                        Firmware                              │
 │   Ext→MCP: binary chunk on BLE → forward to UART → ack BLE  │
-│   MCP→Ext: JSON on UART → forward to BLE (pass-through)     │
+│   MCP→Ext: AK frame on UART → forward to BLE                │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 - App code never thinks about chunking or payload size.
 - One chunk in flight at a time. Firmware backpressure is the flow control.
 - Small payloads bypass chunking entirely (inline JSON fast path).
-- 3 control messages: `stream.ack`, `stream.nack`, `stream.reset`.
-- JSON chunking via `stream.data` for MCP→Extension (text-only UART).
+- 3 binary control frame types: ack (`0x04`), nack (`0x05`), reset (`0x06`). No JSON in stream protocol.
 
 ## Data Paths
 
 1. **DOM / tab list / simple commands**: MCP → UART → firmware pass-through → BLE → extension → browser API → response back through same path as inline JSON.
 
-2. **Screenshot / DOM snapshot** (large, Extension → MCP): Extension StreamSender chunks as AK binary frames → BLE → firmware acks + forwards to UART → MCP StreamReceiver reassembles.
+2. **Screenshot / DOM snapshot** (large, Extension → MCP): Extension half-pipe chunks as AK frame v2 binary → BLE → firmware acks + forwards to UART → MCP half-pipe reassembles.
 
-3. **js.exec** (small script ≤4KB): MCP sends inline JSON → firmware → extension executes → result back as inline JSON.
+3. **js.exec** (small script): MCP sends inline control frame → firmware → extension executes → result back via half-pipe.
 
-4. **js.exec** (large script >4KB): MCP StreamSender sends `stream.data` JSON chunks → UART → firmware pass-through → BLE → Extension StreamReceiver reassembles → executes → result back as inline JSON.
+4. **js.exec** (large script): MCP half-pipe sends AK frame v2 binary chunks → UART → firmware pass-through → BLE → Extension half-pipe reassembles → executes → result back via half-pipe.
 
 ## Design Constraints
 
