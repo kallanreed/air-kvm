@@ -72,7 +72,6 @@ class AirKvmApp {
   RxCallbacks     rx_callbacks_;
   ServerCallbacks server_callbacks_;
   uint32_t        active_conn_count_{0};
-  bool            hid_enabled_{false};
 };
 
 }  // namespace airkvm::fw

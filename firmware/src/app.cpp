@@ -15,12 +15,6 @@ constexpr const char* kTxCharUuid = "6E400103-B5A3-F393-E0A9-E50E24DCCB01";
 #ifndef AIRKVM_FW_VERSION
 #define AIRKVM_FW_VERSION "dev"
 #endif
-#ifndef AIRKVM_ENABLE_HID
-#define AIRKVM_ENABLE_HID 1
-#endif
-#ifndef AIRKVM_HID_SECURITY_MODE
-#define AIRKVM_HID_SECURITY_MODE 1
-#endif
 #define AIRKVM_FW_BUILT_AT __DATE__ " " __TIME__
 
 constexpr const char* kBootMsg =
@@ -55,25 +49,20 @@ void AirKvmApp::Setup() {
 #endif
 
   NimBLEDevice::init(kDeviceName);
-  if (AIRKVM_ENABLE_HID && AIRKVM_HID_SECURITY_MODE != 0) {
-    NimBLEDevice::setSecurityAuth(true, false, true);
-    NimBLEDevice::setSecurityIOCap(0x03);
-  }
+  NimBLEDevice::setSecurityAuth(true, false, true);
+  NimBLEDevice::setSecurityIOCap(0x03);
   NimBLEServer* server = NimBLEDevice::createServer();
   server->setCallbacks(&server_callbacks_);
   NimBLEAdvertising* advertising = NimBLEDevice::getAdvertising();
-  hid_enabled_ = AIRKVM_ENABLE_HID != 0;
   String adv_services = "[\"";
   adv_services += kServiceUuid;
   adv_services += "\"";
-  if (AIRKVM_ENABLE_HID) {
-    hid_.Setup(server, advertising);
-    const String hid_uuid = hid_.HidServiceUuid();
-    if (hid_uuid.length() > 0) {
-      adv_services += ",\"";
-      adv_services += hid_uuid;
-      adv_services += "\"";
-    }
+  hid_.Setup(server, advertising);
+  const String hid_uuid = hid_.HidServiceUuid();
+  if (hid_uuid.length() > 0) {
+    adv_services += ",\"";
+    adv_services += hid_uuid;
+    adv_services += "\"";
   }
   adv_services += "]";
 
@@ -90,14 +79,12 @@ void AirKvmApp::Setup() {
   advertising->addServiceUUID(kServiceUuid);
   advertising->setScanResponse(true);
   transport_.EmitLog(
-      String(R"({"evt":"ble.adv.payload","hid_enabled":)") + JsonBool(hid_enabled_) +
-      R"(,"device_name":")" + kDeviceName +
+      String(R"({"evt":"ble.adv.payload","device_name":")" + kDeviceName +
       R"(","adv_services":)" + adv_services +
       R"(,"scan_rsp_services":[]})");
   advertising->start();
   transport_.EmitLog(
-      String(R"({"evt":"ble.adv.start","hid_enabled":)") + JsonBool(hid_enabled_) +
-      R"(,"device_name":")" + kDeviceName + R"("})");
+      String(R"({"evt":"ble.adv.start","device_name":")" + kDeviceName + R"("})");
 
   transport_.EmitControl(kBootMsg);
 }
@@ -224,8 +211,7 @@ void AirKvmApp::OnBleConnected(NimBLEServer* server) {
   if (adv != nullptr) adv_ok = adv->start();
   transport_.EmitLog(
       String(R"({"evt":"ble.conn","active_conn_count":)") + String(active_conn_count_) +
-      R"(,"adv_restart":)" + JsonBool(adv_ok) +
-      R"(,"hid_enabled":)" + JsonBool(hid_enabled_) + "}");
+      R"(,"adv_restart":)" + JsonBool(adv_ok) + "}");
 }
 
 void AirKvmApp::OnBleDisconnected(NimBLEServer* server) {
@@ -237,8 +223,7 @@ void AirKvmApp::OnBleDisconnected(NimBLEServer* server) {
   if (adv != nullptr) adv_ok = adv->start();
   transport_.EmitLog(
       String(R"({"evt":"ble.disc","active_conn_count":)") + String(active_conn_count_) +
-      R"(,"adv_restart":)" + JsonBool(adv_ok) +
-      R"(,"hid_enabled":)" + JsonBool(hid_enabled_) + "}");
+      R"(,"adv_restart":)" + JsonBool(adv_ok) + "}");
 }
 
 }  // namespace airkvm::fw
