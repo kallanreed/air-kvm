@@ -26,7 +26,7 @@ Rationale:
 - `tab.open`
 - `dom.snapshot`
 - `js.exec`
-- screenshot transfer lifecycle (`transfer.meta/chunk/done/ack/nack/resume`)
+- screenshot transfer lifecycle (AK frame v2 chunking with ack/nack/reset frames)
 
 2. HID works while browser traffic is active:
 - `mouse.move_rel`

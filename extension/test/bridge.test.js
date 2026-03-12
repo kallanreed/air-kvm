@@ -422,7 +422,7 @@ test('connectBle invokes onDisconnect callback on gatt disconnection', async () 
   assert.equal(disconnectCalls, 1);
 });
 
-test('connectBle recovers parser after malformed control line and delivers next valid command', async () => {
+test('connectBle forwards raw bytes as __ble_raw_bytes', async () => {
   __resetBleForTest();
   let notifyHandler = null;
   const commands = [];
@@ -463,21 +463,14 @@ test('connectBle recovers parser after malformed control line and delivers next 
   assert.equal(connected, true);
   assert.equal(typeof notifyHandler, 'function');
 
-  const encoder = new TextEncoder();
-  const malformed = encoder.encode('{"type":"transfer.meta","request_id":"bad"\n');
+  const payload = new Uint8Array([0x41, 0x4b, 0x01, 0x02, 0x03]);
   notifyHandler({
     target: {
-      value: new DataView(malformed.buffer, malformed.byteOffset, malformed.byteLength)
-    }
-  });
-  const valid = encoder.encode('{"type":"transfer.reset","request_id":"reset-1"}\n');
-  notifyHandler({
-    target: {
-      value: new DataView(valid.buffer, valid.byteOffset, valid.byteLength)
+      value: new DataView(payload.buffer, payload.byteOffset, payload.byteLength)
     }
   });
 
   assert.equal(commands.length, 1);
-  assert.equal(commands[0]?.type, 'transfer.reset');
-  assert.equal(commands[0]?.request_id, 'reset-1');
+  assert.equal(commands[0]?.type, '__ble_raw_bytes');
+  assert.deepEqual(commands[0]?.bytes, Array.from(payload));
 });

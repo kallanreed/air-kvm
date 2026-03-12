@@ -8,9 +8,12 @@
 - Active transport/protocol path:
   - BLE UART-style GATT service (`6E400101-B5A3-F393-E0A9-E50E24DCCB01`).
   - Firmware UART output uses framed `AK` packets:
-    - `0x01` binary transfer chunk
+    - `0x01` binary chunk
     - `0x02` control JSON
     - `0x03` log text
+    - `0x04` ack (chunk acknowledged)
+    - `0x05` nack (chunk rejected)
+    - `0x06` reset (clear stream state)
 - Current BLE device name: `air-kvm-ctrl-cb01`.
 - Current MCP tools:
   - `airkvm_send`
@@ -27,17 +30,16 @@
   - ESP32 UART TX uses one deterministic queue/task writer path.
 - Screenshot transfer path:
   - Binary transfer is authoritative (`encoding: "bin"`).
-  - Lifecycle uses `transfer.meta` -> binary chunks -> `transfer.done` -> `transfer.done.ack`.
-  - MCP drives flow control with `transfer.ack`, `transfer.nack`, `transfer.resume`.
+  - Lifecycle uses AK frame v2 chunking: binary chunk frames with ack (`0x04`) flow control.
   - Extension enforces one active screenshot transfer session.
-- BLE control payloads remain standard JSON control lines; large responses use transfer/binary streaming.
+- BLE control payloads remain standard JSON control lines; large responses use AK frame v2 binary streaming via half-pipe.
 
 ## Logging Defaults
 - Bridge page logging defaults to low-noise mode.
 - Verbose mode toggle exists in bridge UI and controls raw BLE trace visibility.
 - Default command log behavior:
   - suppress `SW->BLE` command entries unless verbose
-  - suppress ACK-noise (`transfer.ack`, plain `{ok:true}`) unless verbose
+  - suppress ACK-noise (ack frames, plain `{ok:true}`) unless verbose
   - classify plain `{ok:true}` as `type: "ack"` when shown
 
 ## User Preferences (Operational)
@@ -70,7 +72,7 @@
 - Mouse targeting wrap-up TODO:
   - Current relative-coordinate targeting is still not accurate enough for deterministic cross-window OS automation.
   - Next sprint should implement true HID absolute pointer support (`mouse.move_abs`) with calibration for desktop bounds and multi-monitor mapping.
-- Screenshot metadata path now includes sizing context in `transfer.meta`:
+- Screenshot metadata path now includes sizing context in the initial response:
   - `source_width`, `source_height`, `encoded_width`, `encoded_height`, `encoded_quality`, `encode_attempts`.
 - New E2E harness for exact Google mixed test:
   - `scripts/e2e-google-hid-search.mjs`

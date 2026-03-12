@@ -7,13 +7,13 @@ AirKVM uses two independent transport segments bridged by the firmware:
 1. **MCP ↔ Firmware** over UART (wired)
    - Firmware emits framed binary packets (`AK` frames) for control, log, and binary chunk payloads.
    - MCP sends JSON text lines to UART; firmware reads and forwards to BLE.
-   - For large MCP→Extension payloads (e.g. js.exec scripts), the stream layer
-     sends `stream.data` JSON messages with base64-encoded chunks.
+   - Large MCP→Extension payloads (e.g. js.exec scripts) are sent as AK frame v2
+     binary chunks through the half-pipe transport.
 
 2. **Extension ↔ Firmware** over BLE UART-style GATT (wireless)
    - Control messages are JSON lines over BLE write/notify.
    - Large Extension→MCP payloads (screenshots, DOM snapshots) are sent as
-     AK binary chunk frames through the stream layer.
+     AK binary chunk frames through the half-pipe transport.
    - Firmware acks binary chunks back to the extension after forwarding to UART.
 
 ## 2) BLE GATT Profile
@@ -85,99 +85,171 @@ Unknown escape sequences and named keys are sent literally.
 {"ok":false,"error":"..."}
 ```
 
-## 5) Stream Layer
+## 5) Half-Pipe Transport Layer
 
-The stream layer provides transparent chunked transport for payloads that exceed
-the firmware's buffer limits. App code calls `sender.send(obj)` / `receiver.onMessage(cb)`
-without knowing about chunking.
+The half-pipe transport provides transparent chunked transport for all messages crossing
+the firmware bridge. App code calls `send(obj)` / `onMessage(cb)` without knowing
+about chunking, acking, or transport details.
 
 ### 5.1 Design Principles
 
-- One chunk in flight per stream direction. Firmware backpressure is the flow control.
-- Firmware acks the sender only after confirmed delivery to the other side.
-- The firmware never buffers more than one chunk — can't overrun.
-- Small payloads (≤ chunk threshold) bypass chunking entirely as inline JSON.
+- **Simple API.** App layer sees only `send(obj)` and `onMessage(cb)`.
+- **One stream at a time.** Hardware can't support simultaneous streams. The
+  transport enforces serialization — one `send()` active at a time.
+- **No flooding.** One chunk in flight, wait for ack before sending next.
+  Firmware never sees more than one chunk.
+- **Failure handling.** `send()` rejects on timeout, reset, or cancel. The
+  transport clears its state so the next send can proceed. No wedged pipe.
+- **Firmware is a dumb bridge.** Forwards AK frames between UART and BLE.
+  Rejects oversized payloads with an error.
 
-### 5.2 Stream Control Messages
+### 5.2 Half-Pipe Architecture
 
-| Message | Direction | Format |
-|---------|-----------|--------|
-| `stream.ack` | receiver → sender | `{ "type": "stream.ack", "transfer_id": "tx_XXXXXXXX", "seq": N }` |
-| `stream.nack` | receiver → sender | `{ "type": "stream.nack", "transfer_id": "tx_XXXXXXXX", "seq": N, "reason": "..." }` |
-| `stream.reset` | MCP → all | `{ "type": "stream.reset" }` — hard clear all stream state |
-| `stream.data` | MCP → extension | `{ "type": "stream.data", "transfer_id": "tx_XXXXXXXX", "seq": N, "is_final": bool, "data_b64": "..." }` |
+```
+MCP App                                Extension App
+  │ send(obj)                            │ send(obj)
+  │ onMessage(cb)                        │ onMessage(cb)
+  ▼                                      ▼
+┌──────────────┐                    ┌──────────────┐
+│  MCP Stream  │                    │  Ext Stream  │
+│  (half-pipe) │                    │  (half-pipe) │
+└──────┬───────┘                    └──────┬───────┘
+       │ UART                              │ BLE
+       └────────────┐      ┌───────────────┘
+                 ┌──▼──────▼──┐
+                 │  Firmware   │
+                 │  (bridge)   │
+                 └─────────────┘
+```
 
-### 5.3 Binary Chunk Path (Extension → MCP)
+All chunks use AK binary frame v2 format (see §6). No JSON `stream.data` envelopes,
+no base64 encoding overhead.
 
-Used for screenshots and DOM snapshots. Extension sends AK binary chunk frames
-(`frame_type=0x01`) via BLE. Firmware forwards to UART and acks back to extension.
-MCP StreamReceiver reassembles chunks and delivers the complete object.
+### 5.3 Stream Control
 
-- `is_final` encoded in high bit of seq field (bit 31): `0x80000000`
-- `transfer_id`: random 4-byte tag to distinguish transfers
-- Duplicate chunks are idempotent (re-ack, don't double-append)
-- Timeout: 3s per chunk, 3 retries, then error to app
+All stream control is binary AK frames — no JSON in the stream protocol.
 
-### 5.4 JSON Chunk Path (MCP → Extension)
+| Frame type | Direction | Purpose |
+|------------|-----------|---------|
+| `0x04` ack | receiver → sender | Chunk received. transfer_id + seq in header identify what's acked. |
+| `0x05` nack | receiver → sender | Chunk rejected. Same header fields. |
+| `0x06` reset | either → all | Hard clear all stream state on both sides. |
 
-Used for large js.exec scripts (>4KB). MCP StreamSender sends `stream.data` JSON
-messages via UART. Firmware passes through as normal JSON. Extension StreamReceiver
-reassembles from base64-decoded chunks.
+Ack/nack/reset frames have zero payload (`len=0`). The AK header carries all
+the routing info. Firmware forwards these like any other frame — no parsing needed.
 
-- Chunk size: 384 bytes raw → ~512 bytes base64 → ~620 bytes total JSON (under UART buffer)
-- Extension acks each chunk; firmware does not generate acks for JSON pass-through
+### 5.3.1 Reset Guarantees
+
+Reset (`0x06`) is the escape hatch. It MUST always get through, regardless of
+firmware state. Firmware requirements:
+
+1. **Always accept reset** — even mid-transfer, even if buffers are full, even
+   if BLE is disconnected. Never drop or ignore a reset frame.
+2. **Never queue behind data** — if chunks are pending in the TX queue, reset
+   jumps ahead or flushes the queue first.
+3. **Bidirectional** — UART reset clears local state and forwards to BLE (if
+   connected). BLE reset clears local state and forwards to UART.
+4. **Idempotent** — multiple resets in a row are harmless.
+
+This must be tested explicitly: verify reset is handled when firmware is idle,
+mid-transfer, with full TX queue, and with BLE disconnected.
+
+### 5.4 Chunked Transfer Flow
+
+1. Sender serializes `obj` to JSON bytes.
+2. If bytes fit in one chunk (≤ 255): send single AK frame with `len < 255`.
+3. If bytes exceed 255: split into 255-byte chunks, send sequentially.
+   - Each chunk waits for ack (`0x04`) before sending next.
+   - Last chunk has `len < 255` (or `len == 0` terminator if exact multiple of 255).
+4. Receiver reassembles chunks in seq order, parses JSON, delivers via `onMessage`.
 
 ### 5.5 Failure Recovery
 
 | Failure | Detection | Recovery |
 |---------|-----------|----------|
-| Chunk corrupted | CRC fails | nack → sender retransmits. If nack lost → timeout → retransmit |
-| Chunk or ack lost | Sender timeout (3s) | Retransmit current chunk. Max 3 retries then error |
-| BLE disconnect | Firmware detects | nack with `downstream_disconnected`. On reconnect, MCP retries |
-| Extension SW killed | Chunks for unknown transfer_id | Ignored. MCP times out → `stream.reset` → fresh start |
-| Firmware reboots | Both sides lose connection | On reconnect, MCP sends `stream.reset` |
-| Permanent wedge | Retries exhausted | MCP sends `stream.reset` → all state cleared |
+| Chunk lost or corrupted | Sender timeout (3s) | Retransmit. Max 3 retries then reject |
+| BLE disconnect | Firmware detects | nack. On reconnect, retry |
+| Extension killed | Acks stop arriving | Sender timeout → reset (`0x06`) → fresh start |
+| Firmware reboots | Connection lost | On reconnect, reset (`0x06`) |
+| Permanent wedge | Retries exhausted | reset (`0x06`) → clear state → reject send |
 
 ## 6) AK Binary Frame Format
 
-Used for UART framed stream and BLE binary chunk payloads.
+### 6.1 Frame v2 (current)
+
+All transport segments (UART and BLE) use the same binary frame format.
 
 ```
-[magic0 1B: 0x41 'A'] [magic1 1B: 0x4B 'K'] [version 1B: 0x01]
-[frame_type 1B] [transfer_id 4B LE] [seq 4B LE]
-[payload_len 2B LE] [payload] [crc32 4B LE]
+Offset  Size  Field
+  0     2B    Magic (0x41 0x4B = "AK")
+  2     1B    Type
+  3     2B    Transfer ID (LE) — random tag per transfer
+  5     2B    Seq (LE) — chunk sequence number, starts at 0
+  7     1B    Len — payload byte count (0–255)
+  8     0-255B  Payload
+  8+Len 4B    CRC32 (LE)
 ```
+
+**12 bytes overhead. Max frame size: 267 bytes.**
 
 Frame types:
-| Type | Value | Purpose |
-|------|-------|---------|
-| chunk | `0x01` | Data chunk payload |
-| control | `0x02` | Inline JSON control message |
-| log | `0x03` | Log text |
 
-CRC scope: from `version` through end of `payload` (excludes magic and crc field).
+| Type | Value | Payload | Purpose |
+|------|-------|---------|---------|
+| chunk | `0x01` | 0–255 bytes | Stream data chunk |
+| control | `0x02` | JSON text | App-layer control message (non-streamed) |
+| log | `0x03` | text | Diagnostic log |
+| ack | `0x04` | none | Chunk acknowledged (transfer_id + seq in header) |
+| nack | `0x05` | none | Chunk rejected (transfer_id + seq in header) |
+| reset | `0x06` | none | Hard clear all stream state |
 
-Payload limits:
-- MCP binary_frame.js: 4096 bytes (accommodates full UART line buffer)
-- Extension binary_frame.js: 1024 bytes (stays within firmware's `kMaxBinaryFrameLen` of 1400 after header overhead)
+CRC scope: bytes 2 through end of payload (type + transfer_id + seq + len + payload).
+Excludes magic and CRC field itself.
 
-Transfer ID encoding:
-- Control plane: string `tx_<hex8>` (e.g. `tx_12ab34cd`)
-- Binary frame: uint32 LE numeric value
+### 6.2 End-of-transfer signaling
+
+The `len` field doubles as the end-of-transfer indicator:
+
+- `len < 255` → this is the **final chunk** of the transfer
+- `len == 255` → more chunks expected
+- If the total payload is an exact multiple of 255 bytes, the sender appends a
+  **zero-length terminator** frame (`len == 0`) to signal completion
+
+No separate "final" bit flag is needed.
+
+### 6.3 Transfer limits
+
+| Limit | Value | Derivation |
+|-------|-------|------------|
+| Max payload per chunk | 255 bytes | 1-byte len field |
+| Max chunks per transfer | 65,535 | 2-byte seq field |
+| Max transfer size | ~16 MB | 255 × 65,535 |
+| Max frame on wire | 267 bytes | 12 + 255 |
+
+### 6.4 Transfer ID
+
+2-byte LE unsigned integer in the frame header. Random value per transfer.
+No string encoding — binary everywhere.
+
+### 6.5 Frame v1 (historical)
+
+v1 frames are no longer used and all v1 code has been removed.
 
 ## 7) MCP Tool Contract
 
-Tools exposed by MCP:
+All tools that cross the BLE bridge use the half-pipe transport (`send`/`onMessage`).
+HID commands are handled locally by the firmware.
 
-| Tool | Sends | Response via |
-|------|-------|-------------|
-| `airkvm_send` | raw command | simple ack |
-| `airkvm_list_tabs` | `tabs.list.request` | collector |
-| `airkvm_open_tab` | `tab.open.request` | collector |
-| `airkvm_dom_snapshot` | `dom.snapshot.request` | stream (streamRequest) |
-| `airkvm_exec_js_tab` | `js.exec.request` | collector (inline) or streamSendCommand (large scripts) |
-| `airkvm_screenshot_tab` | `screenshot.request` | stream (streamRequest) |
-| `airkvm_screenshot_desktop` | `screenshot.request` | stream (streamRequest) |
+| Tool | Sends | Transport |
+|------|-------|-----------|
+| `airkvm_send` | raw command | firmware-local (HID) |
+| `airkvm_list_tabs` | `tabs.list.request` | half-pipe |
+| `airkvm_open_tab` | `tab.open.request` | half-pipe |
+| `airkvm_dom_snapshot` | `dom.snapshot.request` | half-pipe |
+| `airkvm_exec_js_tab` | `js.exec.request` | half-pipe |
+| `airkvm_window_bounds` | `window.bounds.request` | half-pipe |
+| `airkvm_screenshot_tab` | `screenshot.request` | half-pipe |
+| `airkvm_screenshot_desktop` | `screenshot.request` | half-pipe |
 
 ## 8) HID Support
 

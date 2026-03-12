@@ -57,9 +57,12 @@ Runtime env vars:
 - Keep module files focused and small (`protocol.js`, `messages.js`, `protocol.cpp`).
 - Prefer descriptive event/type strings (for example `mouse.move_rel`, `busy.changed`).
 - Firmware UART output is framed binary (`AK`) with frame types:
-  - `0x01` transfer chunk payload
+  - `0x01` chunk payload
   - `0x02` control JSON payload
   - `0x03` log text payload
+  - `0x04` ack (chunk acknowledged)
+  - `0x05` nack (chunk rejected)
+  - `0x06` reset (clear stream state)
 
 ## Testing Guidelines
 - JS tests use Node’s built-in test runner (`node:test`) with files under `*/test/*.test.js`.

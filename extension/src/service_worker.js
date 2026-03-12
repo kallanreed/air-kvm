@@ -1,5 +1,6 @@
 import { resolveScreenshotConfig } from './screenshot_protocol.js';
-import { StreamSender, StreamReceiver } from './stream.js';
+import { HalfPipe } from './halfpipe.js';
+import { tryExtractV2Frame, kV2MinFrameLen } from './binary_frame.js';
 const kBleBridgePagePath = 'src/ble_bridge.html';
 const kDebugDefault = false;
 const kDebugStorageKey = 'airkvmVerboseBridgeLog';
@@ -23,7 +24,8 @@ const kDomSnapshotMaxTransferBytes = 2 * 1024 * 1024;
 let lastAutomationTabId = null;
 let bridgeTraceSeq = 0;
 let jsExecInFlight = false;
-let inboundStreamReceiver = null;
+let halfpipe = null;
+let bleBinaryBuffer = new Uint8Array(0);
 const kSwInstanceId = `sw_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
 let debugEnabled = kDebugDefault;
 
@@ -40,10 +42,6 @@ function debugLog(...args) {
   console.log('[airkvm-sw]', `[${kSwInstanceId}]`, ...args);
 }
 
-function activeTransferIds() {
-  return [];
-}
-
 async function writeSwBreadcrumb(event, detail = null) {
   if (!chrome?.storage?.session?.set) return;
   try {
@@ -52,8 +50,7 @@ async function writeSwBreadcrumb(event, detail = null) {
         instance_id: kSwInstanceId,
         ts: Date.now(),
         event,
-        detail,
-        active_transfer_ids: activeTransferIds()
+        detail
       }
     });
   } catch {
@@ -76,8 +73,7 @@ function emitSwAliveHeartbeat() {
     type: 'ble.sw.alive',
     target: 'ble-page',
     instance_id: kSwInstanceId,
-    ts: Date.now(),
-    active_transfer_ids: activeTransferIds()
+    ts: Date.now()
   }).catch(() => {});
 }
 
@@ -524,7 +520,7 @@ async function executeScriptViaCdp(tabId, script, maxResultChars) {
 }
 
 async function postJsExecError(requestId, tabId, startedAt, errorCode, message) {
-  await postEventViaBridge({
+  await getHalfPipe().send({
     type: 'js.exec.error',
     request_id: requestId || null,
     tab_id: Number.isInteger(tabId) ? tabId : null,
@@ -578,7 +574,7 @@ async function sendJsExec(command) {
       );
       return;
     }
-    await postEventViaBridge({
+    await getHalfPipe().send({
       type: 'js.exec.result',
       request_id: requestId,
       tab_id: resolvedTabId,
@@ -628,30 +624,56 @@ async function postBinaryOrThrow(bytes) {
   }
 }
 
-let streamSender = null;
-function getStreamSender() {
-  if (!streamSender) {
-    streamSender = new StreamSender({
-      writeJsonFn: async (obj) => { await postEventOrThrow(obj); },
-      writeBinaryFn: async (bytes) => { await postBinaryOrThrow(bytes); },
-      chunkSize: 160,
-    });
-  }
-  return streamSender;
-}
-
-function getStreamReceiver() {
-  if (inboundStreamReceiver) return inboundStreamReceiver;
-  inboundStreamReceiver = new StreamReceiver({
-    writeJsonFn: async (obj) => postEventViaBridge(obj),
+function getHalfPipe() {
+  if (halfpipe) return halfpipe;
+  halfpipe = new HalfPipe({
+    writeFn: async (frameBytes) => {
+      await postBinaryOrThrow(frameBytes);
+    },
+    log: (msg) => debugLog('[halfpipe]', msg),
   });
-  inboundStreamReceiver.onMessage((msg) => {
+
+  halfpipe.onMessage((msg) => {
     const handler = kBleCommandHandlers[msg?.type];
     if (typeof handler === 'function') {
       handler(msg);
     }
   });
-  return inboundStreamReceiver;
+
+  halfpipe.onControl((msg) => {
+    const handler = kBleCommandHandlers[msg?.type];
+    if (typeof handler === 'function') {
+      handler(msg);
+    }
+  });
+
+  halfpipe.onLog((text) => {
+    debugLog('[fw-log]', text);
+  });
+
+  return halfpipe;
+}
+
+function handleBleRawBytes(bytesArray) {
+  if (!Array.isArray(bytesArray)) return;
+  const incoming = new Uint8Array(bytesArray);
+
+  // Append to buffer
+  const combined = new Uint8Array(bleBinaryBuffer.length + incoming.length);
+  combined.set(bleBinaryBuffer);
+  combined.set(incoming, bleBinaryBuffer.length);
+  bleBinaryBuffer = combined;
+
+  // Extract complete v2 frames
+  const hp = getHalfPipe();
+  while (bleBinaryBuffer.length >= kV2MinFrameLen) {
+    const result = tryExtractV2Frame(bleBinaryBuffer);
+    if (!result) break;
+    bleBinaryBuffer = bleBinaryBuffer.slice(result.consumed);
+    if (result.frame.type !== 'error') {
+      hp.onFrame(result.frame);
+    }
+  }
 }
 
 async function captureTabPng(config) {
@@ -867,8 +889,7 @@ async function sendDomSnapshot(command) {
     throw new Error('dom_snapshot_too_large');
   }
 
-  const sender = getStreamSender();
-  await sender.send(snapshotPayload);
+  await getHalfPipe().send(snapshotPayload);
 }
 
 async function sendScreenshot(command) {
@@ -903,8 +924,7 @@ async function sendScreenshot(command) {
   const mimeMatch = /^data:([^;]+);base64$/i.exec(header);
   const mime = mimeMatch?.[1] || 'image/jpeg';
 
-  const sender = getStreamSender();
-  await sender.send({
+  await getHalfPipe().send({
     type: 'screenshot.response',
     request_id: requestId,
     source,
@@ -920,19 +940,6 @@ async function sendScreenshot(command) {
   });
 }
 
-async function handleTransferReset(command) {
-  if (inboundStreamReceiver) inboundStreamReceiver.reset();
-  if (streamSender) streamSender.reset();
-  void writeSwBreadcrumb('transfer_reset', {
-    request_id: command?.request_id || null
-  });
-  await postEventViaBridge({
-    type: 'transfer.reset.ok',
-    request_id: command?.request_id || null,
-    ts: Date.now()
-  });
-}
-
 async function sendTabsList(command) {
   const requestId = command.request_id || makeRequestId();
   const tabs = await chrome.tabs.query({ lastFocusedWindow: true });
@@ -945,12 +952,12 @@ async function sendTabsList(command) {
       title: tab.title || '',
       url: tab.url || ''
     }));
-  await postEventOrThrow({
+  await getHalfPipe().send({
     type: 'tabs.list',
     request_id: requestId,
     tabs: filtered,
     ts: Date.now()
-  }, 'tabs_list_send_failed');
+  });
 }
 
 async function sendOpenTab(command) {
@@ -973,7 +980,7 @@ async function sendOpenTab(command) {
   if (isAutomationCandidateTab(tab) && Number.isInteger(tab?.id)) {
     lastAutomationTabId = tab.id;
   }
-  await postEventViaBridge({
+  await getHalfPipe().send({
     type: 'tab.open',
     request_id: requestId,
     tab: normalizedTab,
@@ -1048,7 +1055,7 @@ async function sendWindowBounds(command) {
     targetInfo = await getWindowBoundsViaWindowsApi(tab);
   }
 
-  await postEventViaBridge({
+  await getHalfPipe().send({
     type: 'window.bounds',
     request_id: requestId,
     tab_id: tab.id,
@@ -1074,7 +1081,7 @@ const kBleCommandHandlers = {
     'sendDomSnapshot',
     sendDomSnapshot,
     async (cmd, detail) => {
-      await postEventViaBridge({
+      await getHalfPipe().send({
         type: 'dom.snapshot.error',
         request_id: cmd.request_id || null,
         error: detail,
@@ -1087,7 +1094,7 @@ const kBleCommandHandlers = {
     'sendScreenshot',
     sendScreenshot,
     async (cmd, detail) => {
-      await postEventViaBridge({
+      await getHalfPipe().send({
         type: 'screenshot.error',
         request_id: cmd.request_id || null,
         source: cmd.source || 'tab',
@@ -1101,7 +1108,7 @@ const kBleCommandHandlers = {
     'sendTabsList',
     sendTabsList,
     async (cmd, detail) => {
-      await postEventViaBridge({
+      await getHalfPipe().send({
         type: 'tabs.list.error',
         request_id: cmd.request_id || null,
         error: detail,
@@ -1114,7 +1121,7 @@ const kBleCommandHandlers = {
     'sendWindowBounds',
     sendWindowBounds,
     async (cmd, detail) => {
-      await postEventViaBridge({
+      await getHalfPipe().send({
         type: 'window.bounds.error',
         request_id: cmd?.request_id || null,
         tab_id: Number.isInteger(cmd?.tab_id) ? cmd.tab_id : null,
@@ -1128,7 +1135,7 @@ const kBleCommandHandlers = {
     'sendOpenTab',
     sendOpenTab,
     async (cmd, detail) => {
-      await postEventViaBridge({
+      await getHalfPipe().send({
         type: 'tab.open.error',
         request_id: cmd?.request_id || null,
         error: clipText(detail || 'tab_open_failed'),
@@ -1141,41 +1148,13 @@ const kBleCommandHandlers = {
     'sendJsExec',
     sendJsExec,
     async (cmd, detail) => {
-      await postEventViaBridge({
+      await getHalfPipe().send({
         type: 'js.exec.error',
         request_id: cmd?.request_id || null,
         tab_id: Number.isInteger(cmd?.tab_id) ? cmd.tab_id : null,
         duration_ms: 0,
         error_code: 'js_exec_failed',
         error: clipText(detail || 'js_exec_failed'),
-        ts: Date.now()
-      });
-    }
-  ),
-  'stream.ack': (command) => { getStreamSender().onAck(command); },
-  'stream.nack': (command) => { getStreamSender().onAck(command); },
-  'stream.data': (command) => {
-    const receiver = getStreamReceiver();
-    receiver.onControlMessage(command);
-  },
-  'stream.reset': (command) => {
-    const sender = getStreamSender();
-    sender.reset();
-    if (inboundStreamReceiver) inboundStreamReceiver.reset();
-    handleTransferReset();
-  },
-  'transfer.reset': (command) => runBridgeHandler(
-    command,
-    'handleTransferReset',
-    handleTransferReset,
-    async (cmd, detail) => {
-      await postEventViaBridge({
-        type: 'transfer.error',
-        request_id: cmd?.request_id || null,
-        transfer_id: cmd?.transfer_id || null,
-        source: cmd?.source || null,
-        code: 'transfer_reset_failed',
-        detail,
         ts: Date.now()
       });
     }
@@ -1197,6 +1176,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || msg.type !== 'ble.command') return;
   if (!isTrustedBleCommandSender(sender)) {
     sendResponse({ ok: false, error: 'untrusted_sender' });
+    return true;
+  }
+  if (msg.command?.type === '__ble_raw_bytes') {
+    handleBleRawBytes(msg.command.bytes);
+    sendResponse({ ok: true });
     return true;
   }
   debugLog('runtime ble.command', msg.command);
