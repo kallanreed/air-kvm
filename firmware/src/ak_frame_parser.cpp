@@ -53,7 +53,7 @@ bool AkEncodeFrame(
 }
 
 void AkFrameParser::Reset() {
-  state_       = State::kFindMagic0;
+  state_       = State::FindMagic0;
   header_pos_  = 0;
   payload_pos_ = 0;
   crc_pos_     = 0;
@@ -67,27 +67,27 @@ void AkFrameParser::Feed(const uint8_t* bytes, size_t len, const FrameCallback& 
 
 void AkFrameParser::ProcessByte(uint8_t b, const FrameCallback& on_frame) {
   switch (state_) {
-    case State::kFindMagic0:
+    case State::FindMagic0:
       if (b == kMagic0) {
         header_[0] = b;
-        state_ = State::kFindMagic1;
+        state_ = State::FindMagic1;
       }
       return;
 
-    case State::kFindMagic1:
+    case State::FindMagic1:
       if (b == kMagic1) {
         header_[1] = b;
         header_pos_ = 2;
-        state_ = State::kReadHeader;
+        state_ = State::ReadHeader;
       } else if (b == kMagic0) {
         // The 0x41 could be the start of a new magic sequence.
         header_[0] = b;
       } else {
-        state_ = State::kFindMagic0;
+        state_ = State::FindMagic0;
       }
       return;
 
-    case State::kReadHeader:
+    case State::ReadHeader:
       header_[header_pos_++] = b;
       if (header_pos_ == kAkHeaderLen) {
         if (!IsValidType(header_[2])) {
@@ -96,18 +96,18 @@ void AkFrameParser::ProcessByte(uint8_t b, const FrameCallback& on_frame) {
         }
         payload_pos_ = 0;
         crc_pos_     = 0;
-        state_ = header_[7] > 0 ? State::kReadPayload : State::kReadCrc;
+        state_ = header_[7] > 0 ? State::ReadPayload : State::ReadCrc;
       }
       return;
 
-    case State::kReadPayload:
+    case State::ReadPayload:
       payload_[payload_pos_++] = b;
       if (payload_pos_ == header_[7]) {
-        state_ = State::kReadCrc;
+        state_ = State::ReadCrc;
       }
       return;
 
-    case State::kReadCrc:
+    case State::ReadCrc:
       crc_[crc_pos_++] = b;
       if (crc_pos_ == kAkCrcLen) {
         TryEmitFrame(on_frame);

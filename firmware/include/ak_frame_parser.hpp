@@ -57,13 +57,13 @@ class AkFrameParser {
   void Reset();
 
  private:
-  enum class State { kFindMagic0, kFindMagic1, kReadHeader, kReadPayload, kReadCrc };
+  enum class State { FindMagic0, FindMagic1, ReadHeader, ReadPayload, ReadCrc };
 
   static bool IsValidType(uint8_t type);
   void ProcessByte(uint8_t b, const FrameCallback& on_frame);
   void TryEmitFrame(const FrameCallback& on_frame);
 
-  State   state_{State::kFindMagic0};
+  State   state_{State::FindMagic0};
   uint8_t header_[kAkHeaderLen]{};
   uint8_t header_pos_{0};
   uint8_t payload_[kAkMaxPayload]{};

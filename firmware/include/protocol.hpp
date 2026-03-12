@@ -9,19 +9,19 @@ namespace airkvm {
 // Firmware-local commands only. Browser tool traffic is bridged as opaque AK frames
 // and never reaches the command router.
 enum class CommandType {
-  kUnknown,
-  kMouseMoveRel,
-  kMouseMoveAbs,
-  kMouseClick,
-  kKeyTap,
-  kKeyType,
-  kStateRequest,
-  kStateSet,
-  kFwVersionRequest,
+  Unknown,
+  MouseMoveRel,
+  MouseMoveAbs,
+  MouseClick,
+  KeyTap,
+  KeyType,
+  StateRequest,
+  StateSet,
+  FwVersionRequest,
 };
 
 struct Command {
-  CommandType type{CommandType::kUnknown};
+  CommandType type{CommandType::Unknown};
   int dx{0};
   int dy{0};
   int x{0};

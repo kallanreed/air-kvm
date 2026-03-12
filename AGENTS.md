@@ -53,7 +53,7 @@ Runtime env vars:
 
 ## Coding Style & Naming Conventions
 - JavaScript: ESM modules, 2-space indentation, semicolons, single quotes.
-- C++: C++17, 2-space indentation, `kPascalCase` enum values, and `snake_case` for test helper/function names.
+- C++: C++17, 2-space indentation, `PascalCase` for `enum class` members (no `k` prefix — they are already scoped), `kPascalCase` for non-enum constants, and `snake_case` for test helper/function names.
 - Keep module files focused and small (`protocol.js`, `messages.js`, `protocol.cpp`).
 - Prefer descriptive event/type strings (for example `mouse.move_rel`, `busy.changed`).
 - Firmware UART output is framed binary (`AK`) with frame types:

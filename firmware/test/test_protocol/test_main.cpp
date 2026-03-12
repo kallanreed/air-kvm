@@ -5,7 +5,7 @@
 void test_parse_mouse_move_rel() {
   const auto cmd = airkvm::ParseCommandLine("{\"type\":\"mouse.move_rel\",\"dx\":10,\"dy\":-4}");
   TEST_ASSERT_TRUE(cmd.has_value());
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(airkvm::CommandType::kMouseMoveRel), static_cast<int>(cmd->type));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(airkvm::CommandType::MouseMoveRel), static_cast<int>(cmd->type));
   TEST_ASSERT_EQUAL(10, cmd->dx);
   TEST_ASSERT_EQUAL(-4, cmd->dy);
 }
@@ -13,14 +13,14 @@ void test_parse_mouse_move_rel() {
 void test_parse_key_tap() {
   const auto cmd = airkvm::ParseCommandLine("{\"type\":\"key.tap\",\"key\":\"Enter\"}");
   TEST_ASSERT_TRUE(cmd.has_value());
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(airkvm::CommandType::kKeyTap), static_cast<int>(cmd->type));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(airkvm::CommandType::KeyTap), static_cast<int>(cmd->type));
   TEST_ASSERT_EQUAL_STRING("Enter", cmd->key.c_str());
 }
 
 void test_parse_key_type() {
   const auto cmd = airkvm::ParseCommandLine("{\"type\":\"key.type\",\"text\":\"Bluetooth\"}");
   TEST_ASSERT_TRUE(cmd.has_value());
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(airkvm::CommandType::kKeyType), static_cast<int>(cmd->type));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(airkvm::CommandType::KeyType), static_cast<int>(cmd->type));
   TEST_ASSERT_EQUAL_STRING("Bluetooth", cmd->text.c_str());
 }
 
@@ -28,7 +28,7 @@ void test_parse_key_type_escaped_text() {
   const auto cmd = airkvm::ParseCommandLine(
       "{\"type\":\"key.type\",\"text\":\"\\\"\\\\\"}");
   TEST_ASSERT_TRUE(cmd.has_value());
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(airkvm::CommandType::kKeyType), static_cast<int>(cmd->type));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(airkvm::CommandType::KeyType), static_cast<int>(cmd->type));
   TEST_ASSERT_EQUAL_STRING("\"\\", cmd->text.c_str());
 }
 
@@ -40,7 +40,7 @@ void test_invalid_command() {
 void test_parse_state_set() {
   const auto cmd = airkvm::ParseCommandLine("{\"type\":\"state.set\",\"busy\":true}");
   TEST_ASSERT_TRUE(cmd.has_value());
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(airkvm::CommandType::kStateSet), static_cast<int>(cmd->type));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(airkvm::CommandType::StateSet), static_cast<int>(cmd->type));
   TEST_ASSERT_TRUE(cmd->busy);
 }
 
@@ -48,7 +48,7 @@ void test_parse_fw_version_request() {
   const auto cmd = airkvm::ParseCommandLine("{\"type\":\"fw.version.request\"}");
   TEST_ASSERT_TRUE(cmd.has_value());
   TEST_ASSERT_EQUAL_INT(
-      static_cast<int>(airkvm::CommandType::kFwVersionRequest), static_cast<int>(cmd->type));
+      static_cast<int>(airkvm::CommandType::FwVersionRequest), static_cast<int>(cmd->type));
 }
 
 void test_ack_json_ok() {

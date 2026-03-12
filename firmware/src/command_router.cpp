@@ -25,41 +25,41 @@ void CommandRouter::ProcessControlFrame(const AkFrame& frame) {
 
 bool CommandRouter::HandleCommand(const airkvm::Command& cmd) {
   switch (cmd.type) {
-    case airkvm::CommandType::kMouseMoveRel: {
+    case airkvm::CommandType::MouseMoveRel: {
       const bool ok = hid_.SendMouseMoveRel(cmd.dx, cmd.dy);
       if (!ok) transport_.EmitLog("hid.reject mouse.move_rel");
       return ok;
     }
-    case airkvm::CommandType::kMouseMoveAbs:
+    case airkvm::CommandType::MouseMoveAbs:
       return true;
-    case airkvm::CommandType::kMouseClick: {
+    case airkvm::CommandType::MouseClick: {
       const bool ok = hid_.SendMouseClick(cmd.button.c_str());
       if (!ok) transport_.EmitLog("hid.reject mouse.click");
       return ok;
     }
-    case airkvm::CommandType::kKeyTap: {
+    case airkvm::CommandType::KeyTap: {
       const bool ok = hid_.SendKeyTap(cmd.key.c_str());
       if (!ok) transport_.EmitLog("hid.reject key.tap");
       return ok;
     }
-    case airkvm::CommandType::kKeyType: {
+    case airkvm::CommandType::KeyType: {
       const bool ok = hid_.SendKeyType(cmd.text.c_str());
       if (!ok) transport_.EmitLog("hid.reject key.type");
       return ok;
     }
-    case airkvm::CommandType::kStateRequest:
+    case airkvm::CommandType::StateRequest:
       transport_.EmitState(state_);
       return true;
-    case airkvm::CommandType::kStateSet:
+    case airkvm::CommandType::StateSet:
       state_.busy = cmd.busy;
       transport_.EmitState(state_);
       return true;
-    case airkvm::CommandType::kFwVersionRequest:
+    case airkvm::CommandType::FwVersionRequest:
       transport_.EmitControl(
           R"({"type":"fw.version","version":")" AIRKVM_FW_VERSION
           R"(","built_at":")" AIRKVM_FW_BUILT_AT R"("})");
       return true;
-    case airkvm::CommandType::kUnknown:
+    case airkvm::CommandType::Unknown:
       return true;
   }
   return true;

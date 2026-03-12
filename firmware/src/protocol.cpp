@@ -72,43 +72,43 @@ std::optional<Command> ParseCommandLine(const std::string& line) {
   Command cmd;
 
   if (Contains(line, R"("type":"mouse.move_rel")")) {
-    cmd.type = CommandType::kMouseMoveRel;
+    cmd.type = CommandType::MouseMoveRel;
     cmd.dx = ExtractInt(line, "dx", 0);
     cmd.dy = ExtractInt(line, "dy", 0);
     return cmd;
   }
   if (Contains(line, R"("type":"mouse.move_abs")")) {
-    cmd.type = CommandType::kMouseMoveAbs;
+    cmd.type = CommandType::MouseMoveAbs;
     cmd.x = ExtractInt(line, "x", 0);
     cmd.y = ExtractInt(line, "y", 0);
     return cmd;
   }
   if (Contains(line, R"("type":"mouse.click")")) {
-    cmd.type = CommandType::kMouseClick;
+    cmd.type = CommandType::MouseClick;
     cmd.button = ExtractString(line, "button");
     return cmd;
   }
   if (Contains(line, R"("type":"key.tap")")) {
-    cmd.type = CommandType::kKeyTap;
+    cmd.type = CommandType::KeyTap;
     cmd.key = ExtractString(line, "key");
     return cmd;
   }
   if (Contains(line, R"("type":"key.type")")) {
-    cmd.type = CommandType::kKeyType;
+    cmd.type = CommandType::KeyType;
     cmd.text = ExtractString(line, "text");
     return cmd;
   }
   if (Contains(line, R"("type":"state.request")")) {
-    cmd.type = CommandType::kStateRequest;
+    cmd.type = CommandType::StateRequest;
     return cmd;
   }
   if (Contains(line, R"("type":"state.set")")) {
-    cmd.type = CommandType::kStateSet;
+    cmd.type = CommandType::StateSet;
     cmd.busy = ExtractBool(line, "busy", false);
     return cmd;
   }
   if (Contains(line, R"("type":"fw.version.request")")) {
-    cmd.type = CommandType::kFwVersionRequest;
+    cmd.type = CommandType::FwVersionRequest;
     return cmd;
   }
 
