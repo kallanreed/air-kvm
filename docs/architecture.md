@@ -1,4 +1,4 @@
-# Architecture (Current, March 10, 2026)
+# Architecture (Current, March 12, 2026)
 
 ## Deployment Topology
 
@@ -70,7 +70,6 @@ MCP app code                                    Extension app code
 
 - App code never thinks about chunking or payload size.
 - One chunk in flight at a time. Firmware backpressure is the flow control.
-- Small payloads bypass chunking entirely (inline JSON fast path).
 - 3 binary control frame types: ack (`0x04`), nack (`0x05`), reset (`0x06`). No JSON in stream protocol.
 
 ## Data Paths

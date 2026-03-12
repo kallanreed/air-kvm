@@ -1,4 +1,4 @@
-# AirKVM Plan And Status (March 10, 2026)
+# AirKVM Plan And Status (March 12, 2026)
 
 ## Goal
 
@@ -24,7 +24,7 @@ Maintain a reliable remote-control and browser-automation stack where:
 - Structured tools: `airkvm_send`, `airkvm_list_tabs`, `airkvm_open_tab`, `airkvm_dom_snapshot`, `airkvm_exec_js_tab`, `airkvm_screenshot_tab`, `airkvm_screenshot_desktop`.
 - UART parser supports mixed framed stream (`ctrl`, `log`, `bin`, and `bin_error`).
 - `sendRequest()`: sends commands and receives responses via HalfPipe transport (AK frame v2 binary chunking).
-- `sendControlCommand()`: sends control commands via HalfPipe transport.
+- `sendControlCommand()`: sends HID/firmware-local commands as CONTROL frames (type `0x02`) directly to UART — not via HalfPipe.
 - Stream observability: UART debug logging for stream start/complete/error/timeout events.
 - Old dom_snapshot and binary_screenshot collectors removed — stream path is now required.
 
@@ -35,12 +35,6 @@ Maintain a reliable remote-control and browser-automation stack where:
 - Binary AK frame v2 routing via `halfpipe.onFrame()` for ack/nack/reset handling.
 - `bleWrite()` helper consolidates postEvent/postBinary telemetry boilerplate.
 - All legacy inbound transfer code removed (inboundScriptTransfers, old transfer handlers).
-
-## Known Issues
-
-1. **Firmware Phase 2 not build-verified.** Stream ack generation and transfer type removal not yet compiled on ESP32 (no C++ toolchain available on Windows).
-
-2. **Binary frame payload divergence.** MCP allows 4096-byte payloads; extension caps at 1024. Both are now documented in source.
 
 ---
 
@@ -194,6 +188,5 @@ frame forwarding both directions, BLE size guard rejection, reset priority
 - **HID always enabled** — unconditional in firmware; `AIRKVM_ENABLE_HID` and `AIRKVM_HID_SECURITY_MODE` flags removed.
 - **key.type escape handling** — firmware HID controller parses `\n`, `\t`, `\\`, and `{Name}` sequences.
 - **Protocol observability** — stream-specific UART debug logging for all stream operations.
-- **Firmware AK v2 bridge** — Phase 10 above.
-- **Build-verify firmware on ESP32** — Phase 10 AK v2 bridge and size guard need compilation test.
+- **Extension dist build** — `npm run build` in `extension/` copies shared files into `extension/dist/` for Chrome loading; wired into CI.
 - **Documentation discipline** — any transport/protocol change must update `docs/protocol.md`, `docs/architecture.md`, and this file in the same PR.

@@ -1,19 +1,22 @@
-# Protocol (Current, March 10, 2026)
+# Protocol (Current, March 12, 2026)
 
 ## 1) Transport Overview
 
 AirKVM uses two independent transport segments bridged by the firmware:
 
 1. **MCP ↔ Firmware** over UART (wired)
-   - Firmware emits framed binary packets (`AK` frames) for control, log, and binary chunk payloads.
-   - MCP sends JSON text lines to UART; firmware reads and forwards to BLE.
-   - Large MCP→Extension payloads (e.g. js.exec scripts) are sent as AK frame v2
-     binary chunks through the half-pipe transport.
+   - All communication uses AK binary frames.
+   - **HID / firmware-local commands** (`airkvm_send`): MCP encodes the command as
+     a CONTROL frame (type `0x02`, JSON payload) and writes it directly to UART.
+     Firmware's command router handles it locally; response returns as a CONTROL frame.
+   - **Extension-bound commands** (all other tools): MCP sends the command through
+     the half-pipe transport as CHUNK frames (type `0x01`). Firmware forwards the
+     chunks to BLE; the extension's half-pipe reassembles them.
 
 2. **Extension ↔ Firmware** over BLE UART-style GATT (wireless)
-   - Control messages are JSON lines over BLE write/notify.
+   - All communication uses AK binary frames.
    - Large Extension→MCP payloads (screenshots, DOM snapshots) are sent as
-     AK binary chunk frames through the half-pipe transport.
+     AK CHUNK frames through the half-pipe transport.
    - Firmware acks binary chunks back to the extension after forwarding to UART.
 
 ## 2) BLE GATT Profile

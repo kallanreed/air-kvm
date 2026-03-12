@@ -1,7 +1,7 @@
 # air-kvm
 
 POC monorepo for an ESP32-driven remote-control experiment:
-- `firmware/`: ESP32 PlatformIO C++ firmware (BLE HID + control protocol stubs)
+- `firmware/`: ESP32 PlatformIO C++ firmware (BLE HID + BLE GATT bridge)
 - `mcp/`: local STDIO MCP server for AI agent integration
 - `extension/`: Edge/Chrome MV3 extension for browser state/screenshot capture bridge
 
@@ -48,6 +48,13 @@ Run the full local build/test loop:
 
 ```bash
 ./scripts/ci.sh
+```
+
+Load the extension in Chrome/Edge:
+
+```bash
+cd extension && npm run build
+# Then load extension/dist/ as an unpacked extension
 ```
 
 ## MCP server setup

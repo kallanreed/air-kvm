@@ -13,15 +13,16 @@ Deployment topology:
 - Target machine runs only the extension.
 - Extension external transport is BLE only; it does not connect to MCP/localhost.
 
-## Current Reality (March 8, 2026)
-- Firmware currently exposes a custom BLE UART-style service (`6E400101-...`) as the active data path.
+## Current Reality (March 12, 2026)
+- Firmware exposes a custom BLE UART-style service (`6E400101-...`) as the active data path; BLE HID is always enabled (no compile-time flags).
 - MCP supports high-level tools for tabs, DOM snapshot, tab screenshot, and desktop screenshot over UART/BLE relay.
 - Extension BLE bridge + service worker path is active for DOM/screenshot workflows.
+- Extension must be loaded from `extension/dist/` (built by `npm run build`) — not `extension/src/` directly.
 - Source of truth for implementation status and next steps: `docs/plan.md`.
 
 ## Build, Test, and Development Commands
 Run all checks from repo root:
-- `./scripts/ci.sh`: Runs MCP tests, extension tests, firmware native tests, and ESP32 build.
+- `./scripts/ci.sh`: Runs MCP tests, extension tests, extension dist build, firmware native tests, and ESP32 build.
 
 Scripts in `scripts/`:
 - `./scripts/ci.sh`: Full project CI checks.
@@ -33,6 +34,7 @@ Run components individually:
 - `cd mcp && node --test`: Execute MCP unit tests.
 - `cd mcp && AIRKVM_SERIAL_PORT=/dev/cu.usbserial-0001 node src/index.js`: Run MCP server with live UART transport.
 - `cd extension && node --test`: Execute extension unit tests.
+- `cd extension && npm run build`: Build `extension/dist/` for loading as an unpacked Chrome/Edge extension.
 - `cd firmware && pio test -e native`: Run firmware protocol tests on host.
 - `cd firmware && pio run -e esp32dev`: Build firmware for ESP32.
 - `cd firmware && pio device monitor`: Open serial monitor.

@@ -22,13 +22,13 @@ From repo root:
 
 This runs:
 1. `cd mcp && node --test`
-2. `cd extension && node --test`
+2. `cd extension && node --test && npm run build`
 3. `cd firmware && pio test -e native`
 4. `cd firmware && pio run -e esp32dev`
 
-## Firmware Build Variants (HID Off / HID On)
+## Firmware Build
 
-Build and flash:
+Build:
 
 ```bash
 cd firmware
@@ -46,6 +46,17 @@ Rollback guidance:
 1. Reflash: `cd firmware && pio run -e esp32dev -t upload`.
 2. Power-cycle/reset device and reconnect BLE.
 3. If host pairing behavior changed, clear the host BLE pairing cache and pair again.
+
+## Loading the Extension in Chrome/Edge
+
+Load `extension/dist/` as an unpacked extension (Chrome → Extensions → Load unpacked).
+Build it first:
+
+```bash
+cd extension && npm run build
+```
+
+`dist/` is rebuilt by `./scripts/ci.sh` automatically.
 
 ## Manual Commands
 
@@ -108,4 +119,3 @@ See `docs/protocol.md`:
 
 1. Harden long-running screenshot reliability and observability.
 2. Keep docs/protocol synchronized with code after transport changes.
-3. Revisit HID-enabled firmware path when input-injection milestones are prioritized.

@@ -7,6 +7,8 @@
   - `cd mcp && node --test`
 - Extension tests:
   - `cd extension && node --test`
+- Extension build (load from `extension/dist/` in Chrome/Edge):
+  - `cd extension && npm run build`
 - Firmware host tests:
   - `cd firmware && pio test -e native`
 - Firmware build:
