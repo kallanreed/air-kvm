@@ -105,15 +105,15 @@ void TransportMux::EmitLog(const String& message) {
 
 void TransportMux::EmitState(const DeviceState& state) {
   if (state.busy) {
-    EmitControl("{\"type\":\"state\",\"busy\":true}");
+    EmitControl(R"({"type":"state","busy":true})");
   } else {
-    EmitControl("{\"type\":\"state\",\"busy\":false}");
+    EmitControl(R"({"type":"state","busy":false})");
   }
 }
 
 void TransportMux::ForwardFrameToBle(const AkFrame& frame) {
   if (tx_char_ == nullptr) {
-    EmitLog("{\"evt\":\"ble.forward.skip\",\"reason\":\"no_characteristic\"}");
+    EmitLog(R"({"evt":"ble.forward.skip","reason":"no_characteristic"})");
     return;
   }
   if (frame.raw_len > kMaxBleNotifyBytes) {
@@ -126,7 +126,7 @@ void TransportMux::ForwardFrameToBle(const AkFrame& frame) {
             nack.binary, sizeof(nack.binary), &nack.binary_len)) {
       EnqueueFrame(nack);
     }
-    EmitLog("{\"evt\":\"ble.forward.nack\",\"reason\":\"frame_too_large\"}");
+    EmitLog(R"({"evt":"ble.forward.nack","reason":"frame_too_large"})");
     return;
   }
   tx_char_->setValue(frame.raw, frame.raw_len);

@@ -67,47 +67,47 @@ bool ExtractBool(const std::string& s, const std::string& key, bool fallback) {
 }  // namespace
 
 std::optional<Command> ParseCommandLine(const std::string& line) {
-  if (!Contains(line, "\"type\":\"")) return std::nullopt;
+  if (!Contains(line, R"("type":")")) return std::nullopt;
 
   Command cmd;
 
-  if (Contains(line, "\"type\":\"mouse.move_rel\"")) {
+  if (Contains(line, R"("type":"mouse.move_rel")")) {
     cmd.type = CommandType::kMouseMoveRel;
     cmd.dx = ExtractInt(line, "dx", 0);
     cmd.dy = ExtractInt(line, "dy", 0);
     return cmd;
   }
-  if (Contains(line, "\"type\":\"mouse.move_abs\"")) {
+  if (Contains(line, R"("type":"mouse.move_abs")")) {
     cmd.type = CommandType::kMouseMoveAbs;
     cmd.x = ExtractInt(line, "x", 0);
     cmd.y = ExtractInt(line, "y", 0);
     return cmd;
   }
-  if (Contains(line, "\"type\":\"mouse.click\"")) {
+  if (Contains(line, R"("type":"mouse.click")")) {
     cmd.type = CommandType::kMouseClick;
     cmd.button = ExtractString(line, "button");
     return cmd;
   }
-  if (Contains(line, "\"type\":\"key.tap\"")) {
+  if (Contains(line, R"("type":"key.tap")")) {
     cmd.type = CommandType::kKeyTap;
     cmd.key = ExtractString(line, "key");
     return cmd;
   }
-  if (Contains(line, "\"type\":\"key.type\"")) {
+  if (Contains(line, R"("type":"key.type")")) {
     cmd.type = CommandType::kKeyType;
     cmd.text = ExtractString(line, "text");
     return cmd;
   }
-  if (Contains(line, "\"type\":\"state.request\"")) {
+  if (Contains(line, R"("type":"state.request")")) {
     cmd.type = CommandType::kStateRequest;
     return cmd;
   }
-  if (Contains(line, "\"type\":\"state.set\"")) {
+  if (Contains(line, R"("type":"state.set")")) {
     cmd.type = CommandType::kStateSet;
     cmd.busy = ExtractBool(line, "busy", false);
     return cmd;
   }
-  if (Contains(line, "\"type\":\"fw.version.request\"")) {
+  if (Contains(line, R"("type":"fw.version.request")")) {
     cmd.type = CommandType::kFwVersionRequest;
     return cmd;
   }
@@ -117,9 +117,9 @@ std::optional<Command> ParseCommandLine(const std::string& line) {
 
 std::string AckJson(const std::string& id, bool ok, const std::string& error) {
   std::ostringstream oss;
-  oss << "{\"id\":\"" << id << "\",\"ok\":" << (ok ? "true" : "false");
+  oss << R"({"id":")" << id << R"(","ok":)" << (ok ? "true" : "false");
   if (!ok) {
-    oss << ",\"error\":\"" << error << "\"";
+    oss << R"(,"error":")" << error << '"';
   }
   oss << "}";
   return oss.str();

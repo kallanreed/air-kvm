@@ -16,11 +16,11 @@ void CommandRouter::ProcessControlFrame(const AkFrame& frame) {
       frame.payload_len);
   const auto cmd = airkvm::ParseCommandLine(json);
   if (!cmd.has_value()) {
-    transport_.EmitControl("{\"ok\":false,\"error\":\"invalid_command\"}");
+    transport_.EmitControl(R"({"ok":false,"error":"invalid_command"})");
     return;
   }
   const bool ok = HandleCommand(*cmd);
-  transport_.EmitControl(ok ? "{\"ok\":true}" : "{\"ok\":false,\"error\":\"command_rejected\"}");
+  transport_.EmitControl(ok ? R"({"ok":true})" : R"({"ok":false,"error":"command_rejected"})");
 }
 
 bool CommandRouter::HandleCommand(const airkvm::Command& cmd) {
@@ -56,8 +56,8 @@ bool CommandRouter::HandleCommand(const airkvm::Command& cmd) {
       return true;
     case airkvm::CommandType::kFwVersionRequest:
       transport_.EmitControl(
-          "{\"type\":\"fw.version\",\"version\":\"" AIRKVM_FW_VERSION
-          "\",\"built_at\":\"" AIRKVM_FW_BUILT_AT "\"}");
+          R"({"type":"fw.version","version":")" AIRKVM_FW_VERSION
+          R"(","built_at":")" AIRKVM_FW_BUILT_AT R"("})");
       return true;
     case airkvm::CommandType::kUnknown:
       return true;

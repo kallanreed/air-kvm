@@ -24,8 +24,8 @@ constexpr const char* kTxCharUuid = "6E400103-B5A3-F393-E0A9-E50E24DCCB01";
 #define AIRKVM_FW_BUILT_AT __DATE__ " " __TIME__
 
 constexpr const char* kBootMsg =
-    "{\"type\":\"boot\",\"fw\":\"air-kvm-ctrl-cb01\",\"version\":\"" AIRKVM_FW_VERSION
-    "\",\"built_at\":\"" AIRKVM_FW_BUILT_AT "\"}";
+    R"({"type":"boot","fw":"air-kvm-ctrl-cb01","version":")" AIRKVM_FW_VERSION
+    R"(","built_at":")" AIRKVM_FW_BUILT_AT R"("})";
 
 String JsonBool(bool value) {
   return value ? "true" : "false";
@@ -90,14 +90,14 @@ void AirKvmApp::Setup() {
   advertising->addServiceUUID(kServiceUuid);
   advertising->setScanResponse(true);
   transport_.EmitLog(
-      String("{\"evt\":\"ble.adv.payload\",\"hid_enabled\":") + JsonBool(hid_enabled_) +
-      ",\"device_name\":\"" + kDeviceName +
-      "\",\"adv_services\":" + adv_services +
-      ",\"scan_rsp_services\":[]}");
+      String(R"({"evt":"ble.adv.payload","hid_enabled":)") + JsonBool(hid_enabled_) +
+      R"(,"device_name":")" + kDeviceName +
+      R"(","adv_services":)" + adv_services +
+      R"(,"scan_rsp_services":[]})");
   advertising->start();
   transport_.EmitLog(
-      String("{\"evt\":\"ble.adv.start\",\"hid_enabled\":") + JsonBool(hid_enabled_) +
-      ",\"device_name\":\"" + kDeviceName + "\"}");
+      String(R"({"evt":"ble.adv.start","hid_enabled":)") + JsonBool(hid_enabled_) +
+      R"(,"device_name":")" + kDeviceName + R"("})");
 
   transport_.EmitControl(kBootMsg);
 }
@@ -163,7 +163,7 @@ void AirKvmApp::OnBleWrite(const std::string& value) {
     item.len = value.size();
     std::memcpy(item.data, value.data(), item.len);
     if (xQueueSend(ble_rx_queue_, &item, pdMS_TO_TICKS(20)) != pdTRUE) {
-      transport_.EmitLog("{\"evt\":\"ble.rx_queue_overflow\",\"action\":\"drop\"}");
+      transport_.EmitLog(R"({"evt":"ble.rx_queue_overflow","action":"drop"})");
     }
     return;
   }
@@ -214,9 +214,9 @@ void AirKvmApp::OnBleConnected(NimBLEServer* server) {
   NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
   if (adv != nullptr) adv_ok = adv->start();
   transport_.EmitLog(
-      String("{\"evt\":\"ble.conn\",\"active_conn_count\":") + String(active_conn_count_) +
-      ",\"adv_restart\":" + JsonBool(adv_ok) +
-      ",\"hid_enabled\":" + JsonBool(hid_enabled_) + "}");
+      String(R"({"evt":"ble.conn","active_conn_count":)") + String(active_conn_count_) +
+      R"(,"adv_restart":)" + JsonBool(adv_ok) +
+      R"(,"hid_enabled":)" + JsonBool(hid_enabled_) + "}");
 }
 
 void AirKvmApp::OnBleDisconnected(NimBLEServer* server) {
@@ -227,9 +227,9 @@ void AirKvmApp::OnBleDisconnected(NimBLEServer* server) {
   NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
   if (adv != nullptr) adv_ok = adv->start();
   transport_.EmitLog(
-      String("{\"evt\":\"ble.disc\",\"active_conn_count\":") + String(active_conn_count_) +
-      ",\"adv_restart\":" + JsonBool(adv_ok) +
-      ",\"hid_enabled\":" + JsonBool(hid_enabled_) + "}");
+      String(R"({"evt":"ble.disc","active_conn_count":)") + String(active_conn_count_) +
+      R"(,"adv_restart":)" + JsonBool(adv_ok) +
+      R"(,"hid_enabled":)" + JsonBool(hid_enabled_) + "}");
 }
 
 }  // namespace airkvm::fw
