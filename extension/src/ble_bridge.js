@@ -3,7 +3,6 @@ import {
   disconnectBle,
   getConnectedDeviceInfo,
   postBinary,
-  postEvent,
   readBleTxSnapshot,
   setBleVerboseDebug,
   setBleDebugLogger
@@ -271,7 +270,7 @@ function startHealthWatchdog() {
       return;
     }
     const ackWait = waitForHealthAck();
-    const posted = await postEvent({ type: 'state.request' }, { traceId: `bridge-health-${Date.now()}` });
+    const posted = await sendViaHalfPipe({ type: 'state.request' });
     if (!posted) {
       healthState.misses += 1;
       debugLog('health ping send failed', { misses: healthState.misses });
@@ -372,7 +371,14 @@ async function clearPreferredDeviceId() {
   clearPreferredDeviceLocalFallback();
 }
 
-function unwrapCommand(frame) {
+async function sendViaHalfPipe(payload) {
+  return chrome.runtime.sendMessage({
+    type: 'ble.command',
+    command: { type: 'halfpipe.send', payload }
+  });
+}
+
+
   if (!frame || typeof frame !== 'object') return null;
   if (typeof frame.type === 'string') return frame;
   if (typeof frame.ok === 'boolean') return frame;
@@ -436,16 +442,9 @@ async function connectAndBind(options = {}) {
         optionalServices: ['6e400101-b5a3-f393-e0a9-e50e24dccb01']
       },
       onCommand: async (command) => {
-        const unwrapped = unwrapCommand(command);
-        debugLog('rx command from BLE', { raw: command, unwrapped });
-        if (!unwrapped) return;
-        commandLog('BLE->SW', unwrapped);
-        noteControlFrameForHealth(unwrapped);
-        if (state.pendingHandshake && (unwrapped.type === 'state' || typeof unwrapped.ok === 'boolean')) {
-          state.pendingHandshake();
-        }
+        debugLog('rx command from BLE', { raw: command });
         try {
-          await chrome.runtime.sendMessage({ type: 'ble.command', command: unwrapped });
+          await chrome.runtime.sendMessage({ type: 'ble.command', command });
           debugLog('forwarded ble.command to service worker');
         } catch {
           debugLog('failed to forward ble.command');
@@ -464,7 +463,7 @@ async function connectAndBind(options = {}) {
     let handshakeOk = false;
     for (let attempt = 1; attempt <= kHandshakeAttempts; attempt += 1) {
       const handshakePending = waitForControlHandshake(state);
-      await postEvent({ type: 'state.request' }, { traceId: `bridge-handshake-${attempt}` });
+      await sendViaHalfPipe({ type: 'state.request' });
       const okAttempt = await handshakePending;
       if (okAttempt) {
         handshakeOk = true;
@@ -599,6 +598,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .catch((err) => sendResponse({ ok: false, error: String(err?.message || err) }));
     return true;
   }
+  if (msg.type === 'ble.control') {
+    const command = msg.command;
+    commandLog('BLE->SW (ctrl)', command);
+    noteControlFrameForHealth(command);
+    if (state.pendingHandshake && (command?.type === 'state' || command?.type === 'boot' || typeof command?.ok === 'boolean')) {
+      state.pendingHandshake();
+    }
+    sendResponse({ ok: true });
+    return true;
+  }
   if (!msg || msg.target !== 'ble-page') return;
   if (msg.type === 'ble.postBinary') {
     const bytes = Array.isArray(msg.bytes) ? Uint8Array.from(msg.bytes) : null;
@@ -617,32 +626,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         debugLog('ble.postBinary error', { traceId: msg.traceId || null, error });
         sendResponse({ ok: false, error });
       });
-    return true;
-  }
-  if (msg.type !== 'ble.post') return;
-  commandLog('SW->BLE', msg.payload);
-  debugLog('ble.post from service worker', {
-    traceId: msg.traceId || null,
-    type: msg?.payload?.type,
-    bytes: JSON.stringify(msg?.payload || {}).length
-  });
-  if (msg?.payload?.type) {
-    markBridgeActivity(`sw_post:${msg.payload.type}`);
-  } else {
-    markBridgeActivity('sw_post');
-  }
-  postEvent(msg.payload, { traceId: msg.traceId || null })
-    .then((ok) => {
-      debugLog('ble.post result', { traceId: msg.traceId || null, ok });
-      sendResponse({ ok });
-    })
-    .catch((err) => {
-      const error = String(err?.message || err);
-      debugLog('ble.post error', { traceId: msg.traceId || null, error });
-      sendResponse({ ok: false, error });
-    });
-  return true;
-});
 
 async function captureDesktopDataUrl(options = {}) {
   const delayMs = Number.isInteger(options.desktopDelayMs)

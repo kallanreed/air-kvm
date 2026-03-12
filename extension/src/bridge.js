@@ -1,3 +1,4 @@
+
 const UART_SERVICE_UUID = '6e400101-b5a3-f393-e0a9-e50e24dccb01';
 const UART_RX_CHAR_UUID = '6e400102-b5a3-f393-e0a9-e50e24dccb01';
 const UART_TX_CHAR_UUID = '6e400103-b5a3-f393-e0a9-e50e24dccb01';
@@ -386,12 +387,7 @@ async function writeBytesChunked(writeFn, bytes, chunkBytes = kBleWriteChunkByte
   }
 }
 
-function buildOutboundControlLines(payload) {
-  const serialized = JSON.stringify(payload);
-  return [`${serialized}\n`];
-}
-
-// Shared write-with-fallback-and-telemetry helper used by postEvent/postBinary.
+// Shared write-with-fallback-and-telemetry helper used by postBinary.
 // writeFnNoResp / writeFnResp: async callbacks performing the actual BLE write.
 // skipNoResp: when true, skip the withoutResponse attempt entirely.
 async function bleWrite({ writeFnNoResp, writeFnResp, skipNoResp, traceId, payloadType, byteCount }) {
@@ -462,49 +458,6 @@ async function bleWrite({ writeFnNoResp, writeFnResp, skipNoResp, traceId, paylo
       error: String(err?.message || err)
     });
     throw err;
-  }
-}
-
-export async function postEvent(payload, deps = {}) {
-  const encoder = deps.encoder || new TextEncoder();
-  const traceId = deps.traceId || null;
-  try {
-    const connected = await ensureConnected(deps);
-    if (!connected || !rxCharacteristic) return false;
-    const lines = buildOutboundControlLines(payload);
-    const payloadType = payload?.type || 'unknown';
-    const bytes = encoder.encode(lines.join(''));
-    const supportsWithoutResponse = typeof rxCharacteristic.writeValueWithoutResponse === 'function';
-    const supportsWithResponse = typeof rxCharacteristic.writeValueWithResponse === 'function';
-    const chunkedControl = lines.length > 1;
-    const preferWithResponse = chunkedControl && supportsWithResponse;
-    debugVerbose('tx', {
-      traceId,
-      type: payloadType,
-      bytes: bytes.length,
-      mode: preferWithResponse ? 'withResponse' : (supportsWithoutResponse ? 'withoutResponse' : 'withResponse'),
-      line_count: lines.length
-    });
-    const writeAllLines = (method) => async () => {
-      for (const line of lines) {
-        await writeBytesChunked(
-          (chunk) => rxCharacteristic[method](chunk),
-          encoder.encode(line)
-        );
-      }
-    };
-    await bleWrite({
-      writeFnNoResp: writeAllLines('writeValueWithoutResponse'),
-      writeFnResp: writeAllLines('writeValueWithResponse'),
-      skipNoResp: preferWithResponse,
-      traceId,
-      payloadType,
-      byteCount: bytes.length
-    });
-    return true;
-  } catch {
-    debugLog('postEvent failed', { traceId, type: payload?.type || 'unknown' });
-    return false;
   }
 }
 

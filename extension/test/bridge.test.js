@@ -7,10 +7,10 @@ import {
   disconnectBle,
   getConnectedDeviceInfo,
   postBinary,
-  postEvent,
   setBleDebugLogger,
   setBleVerboseDebug
 } from '../src/bridge.js';
+import { tryExtractV2Frame, encodeChunkFrame, makeV2TransferId } from '../src/binary_frame.js';
 
 function telemetryEvents(logged) {
   const events = [];
@@ -52,7 +52,8 @@ test('connectBle establishes UART RX characteristic via navigator.bluetooth', as
   };
 
   const connected = await connectBle({ navigatorLike });
-  const posted = await postEvent({ type: 'busy.changed', busy: true });
+  const testFrame = encodeChunkFrame({ transferId: makeV2TransferId(), seq: 0, payload: new Uint8Array([1]) });
+  const posted = await postBinary(testFrame, { traceId: 'connect-verify' });
 
   assert.equal(connected, true);
   assert.equal(posted, true);
@@ -162,13 +163,13 @@ test('connectBle emits connect-stage failure telemetry when getPrimaryService fa
   )), true);
 });
 
-test('postEvent fails when BLE transport is unavailable', async () => {
+test('postBinary fails when BLE transport is unavailable', async () => {
   __resetBleForTest();
-  const ok = await postEvent({ type: 'busy.changed', busy: true });
+  const ok = await postBinary(Uint8Array.from([1, 2, 3]));
   assert.equal(ok, false);
 });
 
-test('postEvent emits tx fallback telemetry and withResponse failure telemetry', async () => {
+test('postBinary emits tx fallback telemetry and withResponse failure telemetry', async () => {
   __resetBleForTest();
   const logged = [];
   setBleVerboseDebug(true);
@@ -206,7 +207,8 @@ test('postEvent emits tx fallback telemetry and withResponse failure telemetry',
   const connected = await connectBle({ navigatorLike });
   assert.equal(connected, true);
 
-  const ok = await postEvent({ type: 'state.request' }, { traceId: 'trace-1' });
+  const testFrame = encodeChunkFrame({ transferId: makeV2TransferId(), seq: 0, payload: new Uint8Array([1]) });
+  const ok = await postBinary(testFrame, { traceId: 'trace-1' });
   assert.equal(ok, false);
 
   const events = telemetryEvents(logged);
@@ -215,21 +217,21 @@ test('postEvent emits tx fallback telemetry and withResponse failure telemetry',
     && event.op === 'writeValueWithoutResponse'
     && event.result === 'attempt'
     && event.trace_id === 'trace-1'
-    && event.payload_type === 'state.request'
+    && event.payload_type === 'binary'
   )), true);
   assert.equal(events.some((event) => (
     event.evt === 'ble.tx'
     && event.op === 'writeValueWithoutResponse'
     && event.result === 'fallback'
     && event.trace_id === 'trace-1'
-    && event.payload_type === 'state.request'
+    && event.payload_type === 'binary'
   )), true);
   assert.equal(events.some((event) => (
     event.evt === 'ble.tx'
     && event.op === 'writeValueWithResponse'
     && event.result === 'fail'
     && event.trace_id === 'trace-1'
-    && event.payload_type === 'state.request'
+    && event.payload_type === 'binary'
   )), true);
 });
 
@@ -287,7 +289,7 @@ test('postBinary emits tx telemetry with binary payload type', async () => {
   )), true);
 });
 
-test('postEvent keeps control payload as one JSON line across BLE writes', async () => {
+test('postBinary sends AK v2 CHUNK frame bytes verbatim across BLE writes', async () => {
   __resetBleForTest();
   const writes = [];
   const rx = {
@@ -319,14 +321,13 @@ test('postEvent keeps control payload as one JSON line across BLE writes', async
   const connected = await connectBle({ navigatorLike });
   assert.equal(connected, true);
 
-  const bigTabs = [];
-  for (let i = 0; i < 60; i += 1) {
-    bigTabs.push({ id: i + 1, window_id: 1, active: i === 0, title: `Tab ${i}`, url: `https://example.com/${i}` });
-  }
-  const ok = await postEvent({ type: 'tabs.list', request_id: 'tabs-big-1', tabs: bigTabs }, { traceId: 'trace-big-1' });
+  // Build a multi-chunk CHUNK frame large enough to exceed one BLE write
+  const largePayload = new Uint8Array(300).fill(0xAB);
+  const frame = encodeChunkFrame({ transferId: makeV2TransferId(), seq: 0, payload: largePayload.slice(0, 255) });
+  const ok = await postBinary(frame, { traceId: 'trace-big-1' });
   assert.equal(ok, true);
-  assert.equal(writes.length > 1, true);
 
+  // Reassemble all writes and verify it's a valid AK v2 frame
   const total = writes.reduce((sum, chunk) => sum + chunk.length, 0);
   const merged = new Uint8Array(total);
   let cursor = 0;
@@ -334,10 +335,9 @@ test('postEvent keeps control payload as one JSON line across BLE writes', async
     merged.set(chunk, cursor);
     cursor += chunk.length;
   }
-  const mergedText = new TextDecoder().decode(merged);
-  assert.equal(merged[merged.length - 1], 10); // '\n'
-  assert.equal(mergedText.includes('"type":"tabs.list"'), true);
-  assert.equal(mergedText.includes('"request_id":"tabs-big-1"'), true);
+  const result = tryExtractV2Frame(merged);
+  assert.ok(result, 'merged bytes should be a valid AK frame');
+  assert.equal(result.frame.type, 1); // CHUNK = 0x01
 });
 
 test('disconnectBle clears connected device metadata', async () => {

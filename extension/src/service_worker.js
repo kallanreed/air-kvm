@@ -340,37 +340,6 @@ function buildJsExecExpression(script, maxResultChars) {
   })()`;
 }
 
-async function postEventViaBridge(payload) {
-  bridgeTraceSeq += 1;
-  const traceId = `sw-${Date.now()}-${bridgeTraceSeq}`;
-  debugLog('postEventViaBridge tx', {
-    traceId,
-    type: payload?.type,
-    keys: Object.keys(payload || {}),
-    bytes: JSON.stringify(payload || {}).length
-  });
-  try {
-    const res = await chrome.runtime.sendMessage({
-      type: 'ble.post',
-      target: 'ble-page',
-      payload,
-      traceId
-    });
-    debugLog('postEventViaBridge rx', { traceId, res });
-    return Boolean(res?.ok);
-  } catch {
-    debugLog('postEventViaBridge failed', { traceId });
-    return false;
-  }
-}
-
-async function postEventOrThrow(payload, errorCode = 'bridge_post_failed') {
-  const ok = await postEventViaBridge(payload);
-  if (!ok) {
-    throw new Error(errorCode);
-  }
-}
-
 async function postBinaryViaBridge(bytes) {
   bridgeTraceSeq += 1;
   const traceId = `sw-${Date.now()}-${bridgeTraceSeq}`;
@@ -417,8 +386,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     lastAutomationTabId = sender.tab.id;
   }
 
-  postEventViaBridge({ ...msg, tabId: sender?.tab?.id ?? null })
-    .then((ok) => sendResponse({ ok }))
+  getHalfPipe().send({ ...msg, tabId: sender?.tab?.id ?? null })
+    .then(() => sendResponse({ ok: true }))
     .catch(() => sendResponse({ ok: false }));
   return true;
 });
@@ -645,6 +614,9 @@ function getHalfPipe() {
     if (typeof handler === 'function') {
       handler(msg);
     }
+    // Forward CONTROL frames from firmware to the bridge page so it can
+    // resolve the handshake and health checks.
+    chrome.runtime.sendMessage({ type: 'ble.control', command: msg }).catch(() => {});
   });
 
   halfpipe.onLog((text) => {
@@ -655,7 +627,7 @@ function getHalfPipe() {
 }
 
 function handleBleRawBytes(bytesArray) {
-  if (!Array.isArray(bytesArray)) return;
+  if (!Array.isArray(bytesArray) || bytesArray.length === 0) return;
   const incoming = new Uint8Array(bytesArray);
 
   // Append to buffer
@@ -1192,6 +1164,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ ok: true });
     return true;
   }
+  if (msg.command?.type === 'halfpipe.send') {
+    getHalfPipe().send(msg.command.payload)
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ ok: false, error: String(err?.message || err) }));
+    return true;
+  }
   debugLog('runtime ble.command', msg.command);
   handleBleCommand(msg.command)
     .then(() => sendResponse({ ok: true }))
@@ -1250,7 +1228,7 @@ chrome.action.onClicked.addListener(async (tab) => {
       return;
     }
     const summary = await chrome.tabs.sendMessage(tab.id, { type: 'request.dom.summary' });
-    await postEventViaBridge({ ...summary, tabId: tab.id });
+    await getHalfPipe().send({ ...summary, tabId: tab.id });
     clearBadgeLater();
   } catch {
     setBadge('ERR', '#D93025');
