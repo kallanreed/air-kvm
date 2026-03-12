@@ -52,6 +52,31 @@ Runtime env vars:
 - `AIRKVM_TOOL_TIMEOUT_MS`: Timeout for `scripts/mcp-tool-call.mjs` (default `120000`).
 - `AIRKVM_SAVE_SCREENSHOTS=1`: When set, screenshot tool responses are saved to `temp/` and returned with `saved_path`/`saved_bytes`.
 
+## Protocol Rules — DO NOT VIOLATE
+
+These are hard constraints. Violating them introduces subtle bugs that are difficult to trace.
+
+### Extension → Firmware (BLE)
+- **ALL messages from extension to firmware MUST go through HalfPipe (`getHalfPipe().send(msg)`).**
+- HalfPipe encodes messages as AK CHUNK frames (type `0x01`) and sends them via `postBinaryViaBridge` → `ble.postBinary` → `postBinary` → BLE write.
+- **Never write raw JSON to BLE.** Never use `postEvent` / `ble.post` to send commands to firmware. Firmware's BLE RX parser expects AK frames and silently drops anything else.
+- **Never send CONTROL frames (type `0x02`) from extension to firmware.** Firmware's `OnBleFrame` explicitly drops CONTROL frames received from BLE.
+
+### Firmware → Extension (BLE)
+- Firmware sends CONTROL frames (`0x02`) for boot message and state responses.
+- Extension receives them via BLE TX notify → `handleBleRawBytes` → `hp.onFrame()` → `halfpipe.onControl(cb)`.
+
+### MCP → Firmware (UART)
+- **HID / firmware-local commands** (`airkvm_send`): encoded as CONTROL frames (`0x02`) via `sendControlCommand`. Handled locally by firmware.
+- **All other commands** (browser tools): sent via HalfPipe as CHUNK frames (`0x01`) via `sendRequest`. Firmware forwards them to BLE.
+
+### Firmware is a dumb bridge
+- Firmware does not parse CHUNK frame payloads. It forwards CHUNK/ACK/NACK/RESET between UART and BLE unchanged.
+- The only commands firmware handles locally are those sent as CONTROL frames on UART from MCP.
+
+### Full reference
+See `docs/protocol.md` for the complete wire protocol specification.
+
 ## Coding Style & Naming Conventions
 - JavaScript: ESM modules, 2-space indentation, semicolons, single quotes.
 - C++: C++17, 2-space indentation, `PascalCase` for `enum class` members (no `k` prefix — they are already scoped), `kPascalCase` for non-enum constants, and `snake_case` for test helper/function names.
