@@ -194,9 +194,6 @@ frame forwarding both directions, BLE size guard rejection, reset priority
 - **HID always enabled** — unconditional in firmware; `AIRKVM_ENABLE_HID` and `AIRKVM_HID_SECURITY_MODE` flags removed.
 - **key.type escape handling** — firmware HID controller parses `\n`, `\t`, `\\`, and `{Name}` sequences.
 - **Protocol observability** — stream-specific UART debug logging for all stream operations.
-
-## Remaining Work
-
-1. **Firmware AK v2 bridge** — Phase 10 above.
-2. **Build-verify firmware on ESP32** — Phase 10 AK v2 bridge and size guard need compilation test.
-3. **Documentation discipline** — any transport/protocol change must update `docs/protocol.md`, `docs/architecture.md`, and this file in the same PR.
+- **Firmware AK v2 bridge** — Phase 10 above.
+- **Build-verify firmware on ESP32** — Phase 10 AK v2 bridge and size guard need compilation test.
+- **Documentation discipline** — any transport/protocol change must update `docs/protocol.md`, `docs/architecture.md`, and this file in the same PR.
