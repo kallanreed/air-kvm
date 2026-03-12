@@ -24,13 +24,16 @@ class TransportMux {
   // Emit a state CONTROL frame to UART.
   void EmitState(const DeviceState& state);
 
-  // Forward an AK frame to BLE. Sends a NACK back to UART if the frame
-  // exceeds the maximum BLE notify size.
-  void ForwardFrameToBle(const AkFrame& frame);
+  // Forward an AK frame to BLE. Returns false if the frame is too large
+  // to notify; the caller is responsible for sending a NACK.
+  bool ForwardFrameToBle(const AkFrame& frame);
 
   // Forward an AK frame to UART. priority=true uses xQueueSendToFront
   // so RESET frames jump ahead of any queued data.
   void ForwardFrameToUart(const AkFrame& frame, bool priority = false);
+
+  // Send pre-encoded bytes to UART.
+  void SendToUart(const uint8_t* bytes, size_t len, bool priority = false);
 
  private:
   static constexpr size_t kMaxBinaryFrameLen = kAkMaxFrameLen;  // 267 bytes
@@ -41,11 +44,6 @@ class TransportMux {
     size_t binary_len{0};
     uint8_t binary[kMaxBinaryFrameLen]{};
   };
-
-  bool EncodeFrame(
-      uint8_t type, uint16_t transfer_id, uint16_t seq,
-      const uint8_t* payload, uint8_t payload_len,
-      uint8_t* out, size_t out_capacity, size_t* out_len);
 
   void EnqueueFrame(const TxFrame& frame);
   void EmitFrameDirect(const TxFrame& frame);

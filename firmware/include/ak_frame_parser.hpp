@@ -23,6 +23,13 @@ constexpr size_t kAkMaxFrameLen = kAkHeaderLen + kAkMaxPayload + kAkCrcLen; // 2
 // CRC32 (IEEE 802.3) — matches the JS implementation in shared/binary_frame.js
 uint32_t AkCrc32(const uint8_t* data, size_t len);
 
+// Encode an AK frame into out[]. Returns false if out_capacity is too small.
+// CRC is computed over bytes[2..header+payload-1] (everything after magic).
+bool AkEncodeFrame(
+    uint8_t type, uint16_t transfer_id, uint16_t seq,
+    const uint8_t* payload, uint8_t payload_len,
+    uint8_t* out, size_t out_capacity, size_t* out_len);
+
 // Parsed, validated AK frame.
 struct AkFrame {
   uint8_t  type;

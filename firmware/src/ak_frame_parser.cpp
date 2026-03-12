@@ -25,6 +25,33 @@ bool AkFrameParser::IsValidType(uint8_t type) {
   return type >= kAkFrameTypeChunk && type <= kAkFrameTypeReset;
 }
 
+bool AkEncodeFrame(
+    uint8_t type, uint16_t transfer_id, uint16_t seq,
+    const uint8_t* payload, uint8_t payload_len,
+    uint8_t* out, size_t out_capacity, size_t* out_len) {
+  const size_t frame_len = kAkHeaderLen + payload_len + kAkCrcLen;
+  if (frame_len > out_capacity) return false;
+  out[0] = kMagic0;
+  out[1] = kMagic1;
+  out[2] = type;
+  out[3] = static_cast<uint8_t>(transfer_id & 0xFF);
+  out[4] = static_cast<uint8_t>(transfer_id >> 8);
+  out[5] = static_cast<uint8_t>(seq & 0xFF);
+  out[6] = static_cast<uint8_t>(seq >> 8);
+  out[7] = payload_len;
+  if (payload != nullptr && payload_len > 0) {
+    std::memcpy(out + kAkHeaderLen, payload, payload_len);
+  }
+  const uint32_t crc = AkCrc32(out + 2, (kAkHeaderLen - 2) + payload_len);
+  const size_t crc_offset = kAkHeaderLen + payload_len;
+  out[crc_offset + 0] = static_cast<uint8_t>(crc & 0xFF);
+  out[crc_offset + 1] = static_cast<uint8_t>((crc >> 8) & 0xFF);
+  out[crc_offset + 2] = static_cast<uint8_t>((crc >> 16) & 0xFF);
+  out[crc_offset + 3] = static_cast<uint8_t>((crc >> 24) & 0xFF);
+  *out_len = frame_len;
+  return true;
+}
+
 void AkFrameParser::Reset() {
   state_       = State::kFindMagic0;
   header_pos_  = 0;

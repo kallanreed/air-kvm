@@ -136,7 +136,16 @@ void AirKvmApp::OnUartFrame(const AkFrame& frame) {
     return;
   }
   // CHUNK, ACK, NACK, LOG → forward to extension.
-  transport_.ForwardFrameToBle(frame);
+  if (!transport_.ForwardFrameToBle(frame)) {
+    // Frame too large for BLE. Send a NACK back to MCP.
+    uint8_t nack[kAkMaxFrameLen];
+    size_t nack_len = 0;
+    if (AkEncodeFrame(kAkFrameTypeNack, frame.transfer_id, frame.seq,
+                      nullptr, 0, nack, sizeof(nack), &nack_len)) {
+      transport_.SendToUart(nack, nack_len);
+    }
+    transport_.EmitLog(R"({"evt":"ble.forward.nack","reason":"frame_too_large"})");
+  }
 }
 
 void AirKvmApp::OnBleFrame(const AkFrame& frame) {
