@@ -8,7 +8,7 @@ import {
   encodeChunkFrame,
   encodeAckFrame,
   kFrameType,
-} from '../src/binary_frame.js';
+} from '../../shared/binary_frame.js';
 
 function makeTestTransport(commandTimeoutMs = 100) {
   const writes = [];
@@ -30,7 +30,7 @@ function makeTestTransport(commandTimeoutMs = 100) {
       close: (cb) => cb?.()
     };
     if (!this.halfpipe) {
-      const { HalfPipe } = await import('../src/halfpipe.js');
+      const { HalfPipe } = await import('../../shared/halfpipe.js');
       this.halfpipe = new HalfPipe({
         writeFn: async (frameBytes) => {
           await new Promise((resolve, reject) => {

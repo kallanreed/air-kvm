@@ -10,7 +10,7 @@ import {
   setBleDebugLogger,
   setBleVerboseDebug
 } from '../src/bridge.js';
-import { tryExtractV2Frame, encodeChunkFrame, makeV2TransferId } from '../src/binary_frame.js';
+import { tryExtractV2Frame, encodeChunkFrame, makeV2TransferId } from '../../shared/binary_frame.js';
 
 function telemetryEvents(logged) {
   const events = [];

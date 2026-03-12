@@ -1,6 +1,6 @@
 import { SerialPort } from 'serialport';
-import { kMagic0, kMagic1, tryExtractV2Frame, encodeControlFrameV2 } from './binary_frame.js';
-import { HalfPipe } from './halfpipe.js';
+import { kMagic0, kMagic1, tryExtractV2Frame, encodeControlFrameV2 } from '../../shared/binary_frame.js';
+import { HalfPipe } from '../../shared/halfpipe.js';
 
 export class UartTransport {
   constructor({

@@ -1,6 +1,6 @@
 import { resolveScreenshotConfig } from './screenshot_protocol.js';
-import { HalfPipe } from './halfpipe.js';
-import { tryExtractV2Frame, kV2MinFrameLen, kMagic0 } from './binary_frame.js';
+import { HalfPipe } from '../../shared/halfpipe.js';
+import { tryExtractV2Frame, kV2MinFrameLen, kMagic0 } from '../../shared/binary_frame.js';
 const kBleBridgePagePath = 'ble_bridge.html';
 const kDebugDefault = false;
 const kDebugStorageKey = 'airkvmVerboseBridgeLog';

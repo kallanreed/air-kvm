@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { HalfPipe } from '../src/halfpipe.js';
+import { HalfPipe } from '../../shared/halfpipe.js';
 import {
   decodeFrame,
   kFrameType,
   kV2MaxPayload,
-} from '../src/binary_frame.js';
+} from '../../shared/binary_frame.js';
 
 // ---------------------------------------------------------------------------
 // Helpers

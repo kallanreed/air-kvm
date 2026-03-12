@@ -19,7 +19,7 @@ import {
   encodeAckFrame,
   encodeNackFrame,
   encodeResetFrame,
-} from '../src/binary_frame.js';
+} from '../../shared/binary_frame.js';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();

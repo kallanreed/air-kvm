@@ -15,11 +15,15 @@ const distDir      = join(extensionDir, 'dist');
 rmSync(distDir, { recursive: true, force: true });
 mkdirSync(distDir, { recursive: true });
 
-// Copy all JS and HTML source files into dist/
+// Copy all JS and HTML source files into dist/, rewriting shared/ import paths
 for (const file of readdirSync(srcDir)) {
   const ext = extname(file);
   if (ext === '.js' || ext === '.html') {
-    copyFileSync(join(srcDir, file), join(distDir, file));
+    let content = readFileSync(join(srcDir, file), 'utf8');
+    // Rewrite shared/ relative imports to flat dist/ paths
+    content = content.replaceAll("from '../../shared/binary_frame.js'", "from './binary_frame.js'");
+    content = content.replaceAll("from '../../shared/halfpipe.js'",     "from './halfpipe.js'");
+    writeFileSync(join(distDir, file), content);
   }
 }
 

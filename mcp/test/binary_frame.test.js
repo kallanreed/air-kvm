@@ -17,7 +17,7 @@ import {
   encodeResetFrame,
   encodeControlFrameV2,
   encodeLogFrameV2,
-} from '../src/binary_frame.js';
+} from '../../shared/binary_frame.js';
 
 // Shared code returns Uint8Array; helpers for test convenience.
 const enc = new TextEncoder();

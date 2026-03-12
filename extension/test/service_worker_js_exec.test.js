@@ -6,7 +6,7 @@ import {
   decodeFrame,
   kV2MaxPayload,
   makeV2TransferId,
-} from '../src/binary_frame.js';
+} from '../../shared/binary_frame.js';
 
 const kTrustedSender = {
   id: 'test',

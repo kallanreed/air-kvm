@@ -1,6 +1,6 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { HalfPipe } from '../src/halfpipe.js';
+import { HalfPipe } from '../../shared/halfpipe.js';
 import {
   decodeFrame,
   kFrameType,
@@ -10,7 +10,7 @@ import {
   encodeNackFrame,
   encodeResetFrame,
   encodeFrame,
-} from '../src/binary_frame.js';
+} from '../../shared/binary_frame.js';
 
 // Shared code returns Uint8Array; helpers for test convenience.
 const enc = new TextEncoder();
