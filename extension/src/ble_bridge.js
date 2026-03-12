@@ -43,6 +43,7 @@ let lastSwInstanceId = null;
 let lastCommandContext = null;
 let autoScrollEnabled = true;
 let verboseLoggingEnabled = false;
+let connectState = { pendingHandshake: null };
 
 function loadVerboseLoggingPref() {
   try {
@@ -379,14 +380,6 @@ async function sendViaHalfPipe(payload) {
 }
 
 
-  if (!frame || typeof frame !== 'object') return null;
-  if (typeof frame.type === 'string') return frame;
-  if (typeof frame.ok === 'boolean') return frame;
-  if (typeof frame.error === 'string') return frame;
-  if (frame.ch === 'ctrl' && frame.msg && typeof frame.msg === 'object') return frame.msg;
-  return null;
-}
-
 function waitForControlHandshake(state) {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
@@ -413,7 +406,8 @@ async function connectAndBind(options = {}) {
   infoLog('connect start', { trigger, allowChooserFallback });
   notifySw(trigger === 'auto' ? 'connect_auto_start' : 'connect_click');
   setStatus(trigger === 'auto' ? 'Auto-connecting...' : 'Connecting...');
-  const state = { pendingHandshake: null };
+  connectState.pendingHandshake = null;
+  const state = connectState;
   const preferred = await loadPreferredDevice();
   if (trigger === 'auto' && typeof globalThis.navigator?.bluetooth?.getDevices === 'function') {
     try {
