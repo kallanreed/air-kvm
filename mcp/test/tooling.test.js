@@ -3,8 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   buildCommandForTool,
-  isKnownTool,
-  isStructuredTool
+  validateToolArgs,
 } from '../src/tooling.js';
 
 test('buildCommandForTool maps screenshot tools to screenshot.request with bin encoding', () => {
@@ -73,19 +72,51 @@ test('buildCommandForTool maps screenshot tools to screenshot.request with bin e
   });
 });
 
-test('isKnownTool and isStructuredTool classify tools correctly', () => {
-  assert.equal(isKnownTool('airkvm_send'), true);
-  assert.equal(isKnownTool('airkvm_dom_snapshot'), true);
-  assert.equal(isKnownTool('airkvm_list_tabs'), true);
-  assert.equal(isKnownTool('airkvm_window_bounds'), true);
-  assert.equal(isKnownTool('airkvm_open_tab'), true);
-  assert.equal(isKnownTool('airkvm_exec_js_tab'), true);
-  assert.equal(isKnownTool('nope'), false);
-  assert.equal(isStructuredTool('airkvm_send'), false);
-  assert.equal(isStructuredTool('airkvm_list_tabs'), true);
-  assert.equal(isStructuredTool('airkvm_window_bounds'), true);
-  assert.equal(isStructuredTool('airkvm_open_tab'), true);
-  assert.equal(isStructuredTool('airkvm_exec_js_tab'), true);
-  assert.equal(isStructuredTool('airkvm_screenshot_tab'), true);
+test('buildCommandForTool returns null for unknown tools', () => {
+  assert.equal(buildCommandForTool('nope'), null);
+  assert.equal(buildCommandForTool(''), null);
+  assert.equal(buildCommandForTool(undefined), null);
+});
+
+test('validateToolArgs returns ok for valid args', () => {
+  assert.deepEqual(validateToolArgs('airkvm_open_tab', { request_id: 'r1', url: 'https://example.com' }), { ok: true });
+  assert.deepEqual(validateToolArgs('airkvm_exec_js_tab', { request_id: 'r1', script: 'return 1;' }), { ok: true });
+  assert.deepEqual(validateToolArgs('airkvm_list_tabs', {}), { ok: true });
+});
+
+test('validateToolArgs rejects missing required fields', () => {
+  assert.deepEqual(validateToolArgs('airkvm_open_tab', { request_id: 'r1' }), { ok: false, error: 'missing_required_field:url' });
+  assert.deepEqual(validateToolArgs('airkvm_exec_js_tab', { request_id: 'r1' }), { ok: false, error: 'missing_required_field:script' });
+  assert.deepEqual(validateToolArgs('airkvm_open_tab', { url: 'https://example.com' }), { ok: false, error: 'missing_required_field:request_id' });
+});
+
+test('validateToolArgs rejects wrong types', () => {
+  assert.deepEqual(validateToolArgs('airkvm_open_tab', { request_id: 42, url: 'https://x.com' }), { ok: false, error: 'invalid_type:request_id' });
+  assert.deepEqual(validateToolArgs('airkvm_screenshot_tab', { max_width: 1.5 }), { ok: false, error: 'invalid_type:max_width' });
+  assert.deepEqual(validateToolArgs('airkvm_screenshot_tab', { quality: 'high' }), { ok: false, error: 'invalid_type:quality' });
+});
+
+test('validateToolArgs rejects out-of-range values', () => {
+  assert.deepEqual(validateToolArgs('airkvm_exec_js_tab', { request_id: 'r', script: 's', timeout_ms: 10 }), { ok: false, error: 'out_of_range:timeout_ms' });
+  assert.deepEqual(validateToolArgs('airkvm_exec_js_tab', { request_id: 'r', script: 's', timeout_ms: 9999 }), { ok: false, error: 'out_of_range:timeout_ms' });
+});
+
+test('validateToolArgs rejects strings violating length constraints', () => {
+  assert.deepEqual(validateToolArgs('airkvm_exec_js_tab', { request_id: 'r', script: '' }), { ok: false, error: 'too_short:script' });
+  assert.deepEqual(validateToolArgs('airkvm_open_tab', { request_id: 'r', url: 'x'.repeat(2049) }), { ok: false, error: 'too_long:url' });
+});
+
+test('validateToolArgs rejects invalid enum values', () => {
+  assert.deepEqual(validateToolArgs('airkvm_screenshot_tab', { encoding: 'base64' }), { ok: false, error: 'invalid_enum:encoding' });
+});
+
+test('buildCommandForTool throws on invalid args', () => {
+  assert.throws(() => buildCommandForTool('airkvm_open_tab', { request_id: 'r1' }), /missing_required_field:url/);
+  assert.throws(() => buildCommandForTool('airkvm_exec_js_tab', { request_id: 'r', script: '' }), /too_short:script/);
+  assert.throws(() => buildCommandForTool('airkvm_screenshot_tab', { max_width: 99999 }), /out_of_range:max_width/);
+});
+
+test('validateToolArgs returns unknown_tool for unknown name', () => {
+  assert.deepEqual(validateToolArgs('nope', {}), { ok: false, error: 'unknown_tool' });
 });
 

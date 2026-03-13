@@ -120,27 +120,67 @@ export const TOOL_DEFINITIONS = [
   }
 ];
 
+export function validateToolArgs(name, args) {
+  const tool = TOOL_DEFINITIONS.find((t) => t.name === name);
+  if (!tool) return { ok: false, error: 'unknown_tool' };
+
+  const schema = tool.inputSchema;
+  const props = schema.properties || {};
+  const required = schema.required || [];
+
+  for (const field of required) {
+    if (args[field] === undefined || args[field] === null) {
+      return { ok: false, error: `missing_required_field:${field}` };
+    }
+  }
+
+  for (const [field, spec] of Object.entries(props)) {
+    const value = args[field];
+    if (value === undefined) continue;
+
+    if (spec.type === 'string') {
+      if (typeof value !== 'string') return { ok: false, error: `invalid_type:${field}` };
+      if (spec.minLength !== undefined && value.length < spec.minLength) return { ok: false, error: `too_short:${field}` };
+      if (spec.maxLength !== undefined && value.length > spec.maxLength) return { ok: false, error: `too_long:${field}` };
+      if (spec.enum && !spec.enum.includes(value)) return { ok: false, error: `invalid_enum:${field}` };
+    } else if (spec.type === 'integer') {
+      if (!Number.isInteger(value)) return { ok: false, error: `invalid_type:${field}` };
+      if (spec.minimum !== undefined && value < spec.minimum) return { ok: false, error: `out_of_range:${field}` };
+      if (spec.maximum !== undefined && value > spec.maximum) return { ok: false, error: `out_of_range:${field}` };
+    } else if (spec.type === 'number') {
+      if (typeof value !== 'number') return { ok: false, error: `invalid_type:${field}` };
+      if (spec.minimum !== undefined && value < spec.minimum) return { ok: false, error: `out_of_range:${field}` };
+      if (spec.maximum !== undefined && value > spec.maximum) return { ok: false, error: `out_of_range:${field}` };
+    } else if (spec.type === 'boolean') {
+      if (typeof value !== 'boolean') return { ok: false, error: `invalid_type:${field}` };
+    } else if (spec.type === 'object') {
+      if (typeof value !== 'object' || value === null) return { ok: false, error: `invalid_type:${field}` };
+    }
+  }
+
+  return { ok: true };
+}
+
+function buildScreenshotOpts(args) {
+  const opts = { encoding: SCREENSHOT_CONTRACT.encoding };
+  if (Number.isInteger(args?.max_width)) opts.max_width = args.max_width;
+  if (Number.isInteger(args?.max_height)) opts.max_height = args.max_height;
+  if (typeof args?.quality === 'number') opts.quality = args.quality;
+  if (Number.isInteger(args?.max_chars)) opts.max_chars = args.max_chars;
+  if (Number.isInteger(args?.tab_id)) opts.tab_id = args.tab_id;
+  return opts;
+}
+
 export function makeRequestId() {
   return `req_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
 }
 
-export function isKnownTool(name) {
-  return TOOL_DEFINITIONS.some((tool) => tool.name === name);
-}
-
-export function isStructuredTool(name) {
-  return (
-    name === 'airkvm_dom_snapshot' ||
-    name === 'airkvm_list_tabs' ||
-    name === 'airkvm_window_bounds' ||
-    name === 'airkvm_open_tab' ||
-    name === 'airkvm_exec_js_tab' ||
-    name === 'airkvm_screenshot_tab' ||
-    name === 'airkvm_screenshot_desktop'
-  );
-}
-
 export function buildCommandForTool(name, args = {}) {
+  const validation = validateToolArgs(name, args);
+  if (!validation.ok && validation.error !== 'unknown_tool') {
+    throw new Error(validation.error);
+  }
+
   if (name === 'airkvm_send') {
     return args?.command;
   }
@@ -149,14 +189,6 @@ export function buildCommandForTool(name, args = {}) {
     typeof args?.request_id === 'string' && args.request_id.length > 0
       ? args.request_id
       : makeRequestId();
-
-  const screenshotOptions = {};
-  if (Number.isInteger(args?.max_width)) screenshotOptions.max_width = args.max_width;
-  if (Number.isInteger(args?.max_height)) screenshotOptions.max_height = args.max_height;
-  if (typeof args?.quality === 'number') screenshotOptions.quality = args.quality;
-  if (Number.isInteger(args?.max_chars)) screenshotOptions.max_chars = args.max_chars;
-  if (Number.isInteger(args?.tab_id)) screenshotOptions.tab_id = args.tab_id;
-  screenshotOptions.encoding = SCREENSHOT_CONTRACT.encoding;
 
   if (name === 'airkvm_list_tabs') {
     return { type: 'tabs.list.request', request_id: requestId };
@@ -167,13 +199,12 @@ export function buildCommandForTool(name, args = {}) {
     return command;
   }
   if (name === 'airkvm_open_tab') {
-    const command = {
+    return {
       type: 'tab.open.request',
       request_id: requestId,
-      url: typeof args?.url === 'string' ? args.url : '',
-      active: typeof args?.active === 'boolean' ? args.active : true
+      url: args.url,
+      active: args.active ?? true
     };
-    return command;
   }
   if (name === 'airkvm_dom_snapshot') {
     return { type: 'dom.snapshot.request', request_id: requestId };
@@ -182,7 +213,7 @@ export function buildCommandForTool(name, args = {}) {
     const command = {
       type: 'js.exec.request',
       request_id: requestId,
-      script: typeof args?.script === 'string' ? args.script : ''
+      script: args.script
     };
     if (Number.isInteger(args?.tab_id)) command.tab_id = args.tab_id;
     if (Number.isInteger(args?.timeout_ms)) command.timeout_ms = args.timeout_ms;
@@ -190,12 +221,12 @@ export function buildCommandForTool(name, args = {}) {
     return command;
   }
   if (name === 'airkvm_screenshot_tab') {
-    return { type: 'screenshot.request', source: 'tab', request_id: requestId, ...screenshotOptions };
+    return { type: 'screenshot.request', source: 'tab', request_id: requestId, ...buildScreenshotOpts(args) };
   }
   if (name === 'airkvm_screenshot_desktop') {
-    const desktopOptions = { ...screenshotOptions };
-    if (Number.isInteger(args?.desktop_delay_ms)) desktopOptions.desktop_delay_ms = args.desktop_delay_ms;
-    return { type: 'screenshot.request', source: 'desktop', request_id: requestId, ...desktopOptions };
+    const command = { type: 'screenshot.request', source: 'desktop', request_id: requestId, ...buildScreenshotOpts(args) };
+    if (Number.isInteger(args?.desktop_delay_ms)) command.desktop_delay_ms = args.desktop_delay_ms;
+    return command;
   }
 
   return null;

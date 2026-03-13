@@ -5,8 +5,6 @@ import { fileURLToPath } from 'node:url';
 import { validateAgentCommand, toDeviceLine } from './protocol.js';
 import {
   buildCommandForTool,
-  isKnownTool,
-  isStructuredTool,
   TOOL_DEFINITIONS
 } from './tooling.js';
 
@@ -97,9 +95,20 @@ export function createServer({ transport, send }) {
 
   function onToolCall(id, params) {
     const name = params?.name;
-    const command = buildCommandForTool(name, params?.arguments || {});
+    let command;
+    try {
+      command = buildCommandForTool(name, params?.arguments || {});
+    } catch (err) {
+      send({
+        jsonrpc: '2.0',
+        id,
+        result: makeToolResultText(`invalid arguments: ${err.message}`),
+        isError: true
+      });
+      return;
+    }
 
-    if (!isKnownTool(name)) {
+    if (command === null) {
       send({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Unknown tool' } });
       return;
     }
