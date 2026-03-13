@@ -24,6 +24,15 @@ test('tools/list includes structured tools', () => {
   const names = sent[0].result.tools.map((tool) => tool.name);
   assert.deepEqual(names, [
     'airkvm_send',
+    'airkvm_mouse_move_rel',
+    'airkvm_mouse_move_abs',
+    'airkvm_mouse_click',
+    'airkvm_key_tap',
+    'airkvm_key_type',
+    'airkvm_state_request',
+    'airkvm_state_set',
+    'airkvm_fw_version_request',
+    'airkvm_transfer_reset',
     'airkvm_list_tabs',
     'airkvm_window_bounds',
     'airkvm_open_tab',

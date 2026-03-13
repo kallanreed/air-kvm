@@ -1,3 +1,5 @@
+// The main loop that interacts with the MCP client over stdio.
+
 import readline from 'node:readline';
 import { createServer } from './server.js';
 import { UartTransport } from './uart.js';

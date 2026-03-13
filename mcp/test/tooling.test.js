@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
   buildCommandForTool,
   validateToolArgs,
-} from '../src/tooling.js';
+} from '../src/protocol.js';
 
 test('buildCommandForTool maps screenshot tools to screenshot.request with bin encoding', () => {
   const tab = buildCommandForTool('airkvm_screenshot_tab', {

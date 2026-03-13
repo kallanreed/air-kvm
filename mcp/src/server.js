@@ -2,11 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { validateAgentCommand, toDeviceLine } from './protocol.js';
 import {
   buildCommandForTool,
-  TOOL_DEFINITIONS
-} from './tooling.js';
+  isControlTool,
+  listTools,
+} from './protocol.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -88,7 +88,7 @@ export function createServer({ transport, send }) {
       jsonrpc: '2.0',
       id,
       result: {
-        tools: TOOL_DEFINITIONS
+        tools: listTools()
       }
     });
   }
@@ -113,42 +113,29 @@ export function createServer({ transport, send }) {
       return;
     }
 
-    const validation = validateAgentCommand(command);
-    if (!validation.ok) {
-      send({
-        jsonrpc: '2.0',
-        id,
-        result: makeToolResultText(`command rejected: ${validation.error}`),
-        isError: true
-      });
-      return;
-    }
-
-    // airkvm_send: firmware-local HID command
-    if (name === 'airkvm_send') {
+    // Firmware-local control commands (HID, state, fw ops)
+    if (isControlTool(name)) {
       transport.sendControlCommand(command).then((result) => {
         const isExplicitRejection = result?.msg && result.ok === false;
         if (isExplicitRejection) {
-          const line = toDeviceLine(command).trim();
           send({
             jsonrpc: '2.0',
             id,
-            result: makeToolResultText(`device rejected ${line}: ${JSON.stringify(result.msg)}`),
+            result: makeToolResultText(`device rejected ${JSON.stringify(command)}: ${JSON.stringify(result.msg)}`),
             isError: true
           });
           return;
         }
-        const line = toDeviceLine(command).trim();
         const isStateResponse = result?.msg?.type === 'state' && typeof result?.msg?.busy === 'boolean';
         if (command.type === 'state.request' && isStateResponse) {
           send({
             jsonrpc: '2.0',
             id,
-            result: makeToolResultText(`forwarded ${line}; state=${JSON.stringify(result.msg)}`)
+            result: makeToolResultText(`forwarded ${JSON.stringify(command)}; state=${JSON.stringify(result.msg)}`)
           });
           return;
         }
-        send({ jsonrpc: '2.0', id, result: makeToolResultText(`forwarded ${line}`) });
+        send({ jsonrpc: '2.0', id, result: makeToolResultText(`forwarded ${JSON.stringify(command)}`) });
       }).catch((err) => {
         send({
           jsonrpc: '2.0',

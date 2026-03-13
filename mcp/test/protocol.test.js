@@ -1,140 +1,89 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { toDeviceLine, validateAgentCommand } from '../src/protocol.js';
+import { buildCommandForTool, validateToolArgs, isControlTool } from '../src/protocol.js';
 
-test('validateAgentCommand accepts mouse.move_rel', () => {
-  const result = validateAgentCommand({ type: 'mouse.move_rel', dx: 1, dy: -1 });
-  assert.equal(result.ok, true);
+test('buildCommandForTool maps airkvm_mouse_move_rel', () => {
+  assert.deepEqual(buildCommandForTool('airkvm_mouse_move_rel', { dx: 10, dy: -5 }), { type: 'mouse.move_rel', dx: 10, dy: -5 });
 });
 
-test('validateAgentCommand rejects bad key.tap', () => {
-  const result = validateAgentCommand({ type: 'key.tap', key: 13 });
-  assert.equal(result.ok, false);
-  assert.equal(result.error, 'invalid_key_tap');
+test('validateToolArgs rejects airkvm_mouse_move_rel with missing fields', () => {
+  assert.deepEqual(validateToolArgs('airkvm_mouse_move_rel', { dx: 1 }), { ok: false, error: 'missing_required_field:dy' });
+  assert.deepEqual(validateToolArgs('airkvm_mouse_move_rel', {}), { ok: false, error: 'missing_required_field:dx' });
 });
 
-test('validateAgentCommand accepts key.type with bounded text', () => {
-  const result = validateAgentCommand({ type: 'key.type', text: 'Bluetooth' });
-  assert.equal(result.ok, true);
+test('validateToolArgs rejects airkvm_mouse_move_rel with non-integer', () => {
+  assert.deepEqual(validateToolArgs('airkvm_mouse_move_rel', { dx: 1.5, dy: 0 }), { ok: false, error: 'invalid_type:dx' });
 });
 
-test('validateAgentCommand rejects key.type with empty text', () => {
-  const result = validateAgentCommand({ type: 'key.type', text: '' });
-  assert.equal(result.ok, false);
-  assert.equal(result.error, 'invalid_key_type');
+test('buildCommandForTool maps airkvm_mouse_move_abs', () => {
+  assert.deepEqual(buildCommandForTool('airkvm_mouse_move_abs', { x: 100, y: 200 }), { type: 'mouse.move_abs', x: 100, y: 200 });
 });
 
-test('validateAgentCommand accepts key.type with punctuation', () => {
-  const result = validateAgentCommand({ type: 'key.type', text: 'Hello, World! -- The AirKVM' });
-  assert.equal(result.ok, true);
+test('buildCommandForTool maps airkvm_mouse_click', () => {
+  assert.deepEqual(buildCommandForTool('airkvm_mouse_click', { button: 'left' }), { type: 'mouse.click', button: 'left' });
 });
 
-test('validateAgentCommand accepts key.type with backslash escape sequences', () => {
-  const result = validateAgentCommand({ type: 'key.type', text: 'user\\tpass\\n' });
-  assert.equal(result.ok, true);
+test('validateToolArgs rejects airkvm_mouse_click with non-string button', () => {
+  assert.deepEqual(validateToolArgs('airkvm_mouse_click', { button: 1 }), { ok: false, error: 'invalid_type:button' });
 });
 
-test('validateAgentCommand accepts key.type with named key braces', () => {
-  const result = validateAgentCommand({ type: 'key.type', text: 'hello{Enter}world' });
-  assert.equal(result.ok, true);
+test('buildCommandForTool maps airkvm_key_tap', () => {
+  assert.deepEqual(buildCommandForTool('airkvm_key_tap', { key: 'Enter' }), { type: 'key.tap', key: 'Enter' });
 });
 
-test('toDeviceLine returns JSONL', () => {
-  const line = toDeviceLine({ type: 'state.request' });
-  assert.equal(line, '{"type":"state.request"}\n');
+test('validateToolArgs rejects airkvm_key_tap with non-string key', () => {
+  assert.deepEqual(validateToolArgs('airkvm_key_tap', { key: 13 }), { ok: false, error: 'invalid_type:key' });
 });
 
-test('validateAgentCommand accepts state.set with boolean busy', () => {
-  const result = validateAgentCommand({ type: 'state.set', busy: true });
-  assert.equal(result.ok, true);
+test('buildCommandForTool maps airkvm_key_type', () => {
+  assert.deepEqual(buildCommandForTool('airkvm_key_type', { text: 'Hello, World!' }), { type: 'key.type', text: 'Hello, World!' });
 });
 
-test('validateAgentCommand accepts fw.version.request', () => {
-  const result = validateAgentCommand({ type: 'fw.version.request' });
-  assert.equal(result.ok, true);
+test('validateToolArgs rejects airkvm_key_type with empty text', () => {
+  assert.deepEqual(validateToolArgs('airkvm_key_type', { text: '' }), { ok: false, error: 'too_short:text' });
 });
 
-test('validateAgentCommand accepts screenshot.request with tuning fields', () => {
-  const result = validateAgentCommand({
-    type: 'screenshot.request',
-    source: 'tab',
-    request_id: 'r1',
-    max_width: 800,
-    max_height: 450,
-    quality: 0.55,
-    max_chars: 70000,
-    desktop_delay_ms: 500
-  });
-  assert.equal(result.ok, true);
+test('validateToolArgs rejects airkvm_key_type with text too long', () => {
+  assert.deepEqual(validateToolArgs('airkvm_key_type', { text: 'a'.repeat(129) }), { ok: false, error: 'too_long:text' });
 });
 
-test('validateAgentCommand accepts tab.open.request within bounds', () => {
-  const result = validateAgentCommand({
-    type: 'tab.open.request',
-    request_id: 'tab-1',
-    url: 'https://example.com',
-    active: false
-  });
-  assert.equal(result.ok, true);
+test('buildCommandForTool maps airkvm_key_type with escape sequences and braces', () => {
+  assert.deepEqual(buildCommandForTool('airkvm_key_type', { text: 'user\\tpass\\n' }), { type: 'key.type', text: 'user\\tpass\\n' });
+  assert.deepEqual(buildCommandForTool('airkvm_key_type', { text: 'hello{Enter}world' }), { type: 'key.type', text: 'hello{Enter}world' });
 });
 
-test('validateAgentCommand rejects tab.open.request with invalid URL scheme', () => {
-  const result = validateAgentCommand({
-    type: 'tab.open.request',
-    request_id: 'tab-1',
-    url: 'ftp://example.com'
-  });
-  assert.equal(result.ok, false);
-  assert.equal(result.error, 'invalid_tab_open_request');
+test('buildCommandForTool maps airkvm_state_request', () => {
+  assert.deepEqual(buildCommandForTool('airkvm_state_request', {}), { type: 'state.request' });
 });
 
-test('validateAgentCommand accepts js.exec.request within bounds', () => {
-  const result = validateAgentCommand({
-    type: 'js.exec.request',
-    request_id: 'js-1',
-    script: 'return document.title;',
-    tab_id: 5,
-    timeout_ms: 500,
-    max_result_chars: 300
-  });
-  assert.equal(result.ok, true);
+test('buildCommandForTool maps airkvm_state_set', () => {
+  assert.deepEqual(buildCommandForTool('airkvm_state_set', { busy: true }), { type: 'state.set', busy: true });
 });
 
-test('validateAgentCommand accepts window.bounds.request within bounds', () => {
-  const result = validateAgentCommand({
-    type: 'window.bounds.request',
-    request_id: 'wb-1',
-    tab_id: 5
-  });
-  assert.equal(result.ok, true);
+test('validateToolArgs rejects airkvm_state_set with non-boolean', () => {
+  assert.deepEqual(validateToolArgs('airkvm_state_set', { busy: 'yes' }), { ok: false, error: 'invalid_type:busy' });
 });
 
-test('validateAgentCommand rejects window.bounds.request without request_id', () => {
-  const result = validateAgentCommand({
-    type: 'window.bounds.request'
-  });
-  assert.equal(result.ok, false);
-  assert.equal(result.error, 'invalid_window_bounds_request');
+test('buildCommandForTool maps airkvm_fw_version_request', () => {
+  assert.deepEqual(buildCommandForTool('airkvm_fw_version_request', {}), { type: 'fw.version.request' });
 });
 
-test('validateAgentCommand rejects js.exec.request when script is too long', () => {
-  const result = validateAgentCommand({
-    type: 'js.exec.request',
-    request_id: 'js-1',
-    script: 'a'.repeat(12001)
-  });
-  assert.equal(result.ok, false);
-  assert.equal(result.error, 'invalid_js_exec_request');
+test('buildCommandForTool maps airkvm_transfer_reset', () => {
+  assert.deepEqual(buildCommandForTool('airkvm_transfer_reset', {}), { type: 'transfer.reset' });
 });
 
-test('validateAgentCommand rejects js.exec.request when timeout is out of range', () => {
-  const result = validateAgentCommand({
-    type: 'js.exec.request',
-    request_id: 'js-2',
-    script: 'return 1;',
-    timeout_ms: 10
-  });
-  assert.equal(result.ok, false);
-  assert.equal(result.error, 'invalid_js_exec_request');
+test('isControlTool identifies HID and firmware tools', () => {
+  assert.equal(isControlTool('airkvm_send'), true);
+  assert.equal(isControlTool('airkvm_mouse_move_rel'), true);
+  assert.equal(isControlTool('airkvm_mouse_move_abs'), true);
+  assert.equal(isControlTool('airkvm_mouse_click'), true);
+  assert.equal(isControlTool('airkvm_key_tap'), true);
+  assert.equal(isControlTool('airkvm_key_type'), true);
+  assert.equal(isControlTool('airkvm_state_request'), true);
+  assert.equal(isControlTool('airkvm_state_set'), true);
+  assert.equal(isControlTool('airkvm_fw_version_request'), true);
+  assert.equal(isControlTool('airkvm_transfer_reset'), true);
+  assert.equal(isControlTool('airkvm_list_tabs'), false);
+  assert.equal(isControlTool('airkvm_screenshot_tab'), false);
 });
