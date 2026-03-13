@@ -113,7 +113,7 @@ Firmware build/runtime:
 See `docs/protocol.md`:
 - BLE service/characteristic UUIDs
 - control + binary framing behavior
-- screenshot transfer flow (AK frame v2 chunking with ack/nack/reset frames)
+- screenshot transfer flow (AK frame chunking with ack/nack/reset frames)
 
 ## Current Focus Areas
 

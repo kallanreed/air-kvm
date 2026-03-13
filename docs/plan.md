@@ -23,7 +23,7 @@ Maintain a reliable remote-control and browser-automation stack where:
 ### MCP
 - Structured tools: `airkvm_send`, `airkvm_list_tabs`, `airkvm_open_tab`, `airkvm_dom_snapshot`, `airkvm_exec_js_tab`, `airkvm_screenshot_tab`, `airkvm_screenshot_desktop`.
 - UART parser supports mixed framed stream (`ctrl`, `log`, `bin`, and `bin_error`).
-- `sendRequest()`: sends commands and receives responses via HalfPipe transport (AK frame v2 binary chunking).
+- `sendRequest()`: sends commands and receives responses via HalfPipe transport (AK frame binary chunking).
 - `sendControlCommand()`: sends HID/firmware-local commands as CONTROL frames (type `0x02`) directly to UART — not via HalfPipe.
 - Stream observability: UART debug logging for stream start/complete/error/timeout events.
 - Old dom_snapshot and binary_screenshot collectors removed — stream path is now required.
@@ -31,8 +31,8 @@ Maintain a reliable remote-control and browser-automation stack where:
 ### Extension
 - BLE bridge page is the primary BLE runtime path.
 - Service worker handles all browser automation commands.
-- Half-pipe transport (HalfPipe class): sends screenshots and DOM snapshots, receives commands — all via AK frame v2 binary chunks with `send(obj)`/`onMessage(cb)` API.
-- Binary AK frame v2 routing via `halfpipe.onFrame()` for ack/nack/reset handling.
+- Half-pipe transport (HalfPipe class): sends screenshots and DOM snapshots, receives commands — all via AK frame binary chunks with `send(obj)`/`onMessage(cb)` API.
+- Binary AK frame routing via `halfpipe.onFrame()` for ack/nack/reset handling.
 - `bleWrite()` helper consolidates postEvent/postBinary telemetry boilerplate.
 - All legacy inbound transfer code removed (inboundScriptTransfers, old transfer handlers).
 
@@ -66,7 +66,7 @@ MCP app code                                    Extension app code
 - One chunk in flight at a time per stream. Firmware backpressure is the flow control.
 - Firmware acks the sender only after confirmed delivery to the other side.
 - The firmware never buffers more than one chunk — can't overrun.
-- Single binary AK frame v2 chunking mode for all directions.
+- Single binary AK frame chunking mode for all directions.
 
 ### Wire Protocol
 
@@ -78,7 +78,7 @@ See `docs/protocol.md` for full specification.
 #### Phase 2 — Firmware stream awareness ✅
 #### Phase 3 — Migrate dom/screenshot/large-js.exec to stream ✅
 
-- DOM snapshot, screenshot, and js.exec all use half-pipe transport (AK frame v2 binary chunks).
+- DOM snapshot, screenshot, and js.exec all use half-pipe transport (AK frame binary chunks).
 - All commands and responses go through half-pipe — no inline size thresholds.
 
 #### Phase 4 — Legacy cleanup ✅
@@ -113,9 +113,9 @@ See `docs/protocol.md` §5–§6 for full spec. Summary:
 - **`len < 255`** signals final chunk. Exact multiples send `len=0` terminator.
 - **Reset always gets through** — never queued behind data, works from any state.
 
-### Phase 5 — AK frame v2 codec ✅
+### Phase 5 — AK frame codec ✅
 
-Implemented `binary_frame.js` (shared for MCP/extension) with v2 format:
+Implemented `binary_frame.js` (shared for MCP/extension) with format:
 - `encodeFrame(type, transferId, seq, payload)` → Uint8Array/Buffer
 - `decodeFrame(bytes)` → `{type, transferId, seq, payload}` or null
 - CRC32 encode/verify, all six frame types supported
@@ -126,7 +126,7 @@ Implemented `binary_frame.js` (shared for MCP/extension) with v2 format:
 ### Phase 6 — MCP half-pipe transport ✅
 
 MCP-side HalfPipe implemented:
-- `send(obj)` → JSON serialize → chunk into AK v2 frames → write to UART →
+- `send(obj)` → JSON serialize → chunk into AK frames → write to UART →
   wait for ack per chunk → resolve when complete
 - `onMessage(cb)` → receive AK frames → reassemble → parse JSON → deliver
 - One-send-at-a-time, timeout rejection, reset clears state
@@ -144,7 +144,7 @@ MCP-side HalfPipe implemented:
 ### Phase 8 — Extension half-pipe transport ✅
 
 Extension-side HalfPipe implemented — same `send(obj)`/`onMessage(cb)` API:
-- `send(obj)` → JSON serialize → chunk → AK v2 frames → BLE bridge write → ack-gated → resolve
+- `send(obj)` → JSON serialize → chunk → AK frames → BLE bridge write → ack-gated → resolve
 - `onMessage(cb)` → receive AK frames from BLE bridge → reassemble → deliver
 
 **Files**: `extension/src/halfpipe.js`, `extension/src/bridge.js`
@@ -157,7 +157,7 @@ Extension-side HalfPipe implemented — same `send(obj)`/`onMessage(cb)` API:
 
 **Files**: `extension/src/service_worker.js`
 
-### Phase 10 — Firmware: AK v2 bridge ✅
+### Phase 10 — Firmware: AK bridge ✅
 
 - UART reader: detect AK magic (`0x41 0x4B`) on serial input, switch to binary
   frame parsing (read by header length). Fall back to text line for non-AK input.

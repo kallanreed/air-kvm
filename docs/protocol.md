@@ -125,7 +125,7 @@ MCP App                                Extension App
                  └─────────────┘
 ```
 
-All chunks use AK binary frame v2 format (see §6). No JSON `stream.data` envelopes,
+All chunks use AK binary frame format (see §6). No JSON `stream.data` envelopes,
 no base64 encoding overhead.
 
 ### 5.3 Stream Control
@@ -178,7 +178,7 @@ mid-transfer, with full TX queue, and with BLE disconnected.
 
 ## 6) AK Binary Frame Format
 
-### 6.1 Frame v2 (current)
+### 6.1 Frame (current)
 
 All transport segments (UART and BLE) use the same binary frame format.
 

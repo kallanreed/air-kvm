@@ -38,13 +38,13 @@
   `airkvm_screenshot_desktop`.
 - Validates and forwards control commands to firmware via UART.
 - Parses mixed UART framed stream (control / log / binary).
-- **Half-pipe transport** (HalfPipe class): unified `send(obj)`/`onMessage(cb)` API for all message types, with automatic chunking via AK frame v2 binary frames.
+- **Half-pipe transport** (HalfPipe class): unified `send(obj)`/`onMessage(cb)` API for all message types, with automatic chunking via AK fram binary frames.
 - Drives reset (`0x06`) as universal recovery mechanism.
 
 ### 3. Extension (`extension/`)
 
 - `service_worker.js`: handles browser automation (tabs, DOM, js.exec, screenshots).
-- **Half-pipe transport** (HalfPipe class): sends screenshots and DOM snapshots, receives commands (js.exec) — all via AK frame v2 binary chunks with `send(obj)`/`onMessage(cb)` API.
+- **Half-pipe transport** (HalfPipe class): sends screenshots and DOM snapshots, receives commands (js.exec) — all via AK frame binary chunks with `send(obj)`/`onMessage(cb)` API.
 - `ble_bridge.html` + `ble_bridge.js`: BLE runtime context (Web Bluetooth).
 - `bridge.js`: BLE transport helper with `bleWrite()` for write-with-fallback and telemetry.
 
@@ -76,11 +76,11 @@ MCP app code                                    Extension app code
 
 1. **DOM / tab list / simple commands**: MCP → UART → firmware pass-through → BLE → extension → browser API → response back through same path as inline JSON.
 
-2. **Screenshot / DOM snapshot** (large, Extension → MCP): Extension half-pipe chunks as AK frame v2 binary → BLE → firmware acks + forwards to UART → MCP half-pipe reassembles.
+2. **Screenshot / DOM snapshot** (large, Extension → MCP): Extension half-pipe chunks as AK frame binary → BLE → firmware acks + forwards to UART → MCP half-pipe reassembles.
 
 3. **js.exec** (small script): MCP sends inline control frame → firmware → extension executes → result back via half-pipe.
 
-4. **js.exec** (large script): MCP half-pipe sends AK frame v2 binary chunks → UART → firmware pass-through → BLE → Extension half-pipe reassembles → executes → result back via half-pipe.
+4. **js.exec** (large script): MCP half-pipe sends AK frame binary chunks → UART → firmware pass-through → BLE → Extension half-pipe reassembles → executes → result back via half-pipe.
 
 ## Design Constraints
 
