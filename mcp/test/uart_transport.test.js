@@ -224,3 +224,50 @@ test('close cleans up halfpipe', async () => {
   assert.equal(transport.halfpipe, null);
   assert.equal(transport.opened, false);
 });
+
+test('concurrent send() calls are serialized — second waits for first', async () => {
+  const { transport } = makeTestTransport(500);
+  await transport.open();
+
+  const order = [];
+
+  const p1 = transport.send({ type: 'mouse.click', button: 'left' }, fwTool, { timeoutMs: 500 });
+  const p2 = transport.send({ type: 'state.request' }, fwTool, { timeoutMs: 500 });
+
+  // Resolve p1 after a tick; p2 must not have started yet (_pending still belongs to p1)
+  setTimeout(() => {
+    order.push('respond-1');
+    transport._handleControl({ ok: true });
+  }, 20);
+
+  // Resolve p2 after p1 is settled
+  setTimeout(() => {
+    order.push('respond-2');
+    transport._handleControl({ ok: true });
+  }, 60);
+
+  const [r1, r2] = await Promise.all([p1, p2]);
+  assert.equal(r1.ok, true);
+  assert.equal(r2.ok, true);
+  // Both responses arrived in order, confirming serialization
+  assert.deepEqual(order, ['respond-1', 'respond-2']);
+  transport.close();
+});
+
+test('concurrent send(): first failure does not block second', async () => {
+  const { transport } = makeTestTransport(500);
+  await transport.open();
+
+  const p1 = transport.send({ type: 'mouse.click', button: 'left' }, fwTool, { timeoutMs: 40 });
+  const p2 = transport.send({ type: 'state.request' }, fwTool, { timeoutMs: 200 });
+
+  // p1 times out; p2 should then proceed and succeed
+  setTimeout(() => {
+    transport._handleControl({ ok: true });
+  }, 80);
+
+  await assert.rejects(() => p1, /device_timeout/);
+  const r2 = await p2;
+  assert.equal(r2.ok, true);
+  transport.close();
+});
