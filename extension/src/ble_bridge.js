@@ -1,3 +1,5 @@
+import { HalfPipe } from '../../shared/halfpipe.js';
+import { kTarget } from '../../shared/binary_frame.js';
 import {
   connectBle,
   disconnectBle,
@@ -44,6 +46,27 @@ let lastCommandContext = null;
 let autoScrollEnabled = true;
 let verboseLoggingEnabled = false;
 let connectState = { pendingHandshake: null };
+
+const hp = new HalfPipe({
+  writeFn: async (bytes) => { await postBinary(bytes); },
+  ackTarget: kTarget.MCP,
+  log: (msg) => debugLog('[halfpipe]', msg),
+});
+
+hp.onMessage((msg) => {
+  chrome.runtime.sendMessage({ type: 'hp.message', msg }).catch(() => {});
+});
+
+hp.onControl((msg) => {
+  noteControlFrameForHealth(msg);
+  if (connectState.pendingHandshake && (msg?.type === 'state' || msg?.type === 'boot' || typeof msg?.ok === 'boolean')) {
+    connectState.pendingHandshake();
+  }
+});
+
+hp.onLog((text) => {
+  debugLog('[fw-log]', text);
+});
 
 function loadVerboseLoggingPref() {
   try {
@@ -205,6 +228,7 @@ async function markDisconnected(reason) {
     last_command_context: lastCommandContext
   });
   stopHealthWatchdog();
+  hp.reset().catch(() => {});
   disconnectBle();
   notifySw('disconnect', reason || null);
   setStatus(reason ? `Disconnected (${reason})` : 'Disconnected');
@@ -271,7 +295,8 @@ function startHealthWatchdog() {
       return;
     }
     const ackWait = waitForHealthAck();
-    const posted = await sendViaHalfPipe({ type: 'state.request' });
+    let posted = false;
+    try { await hp.send({ type: 'state.request' }, kTarget.MCP); posted = true; } catch { posted = false; }
     if (!posted) {
       healthState.misses += 1;
       debugLog('health ping send failed', { misses: healthState.misses });
@@ -372,14 +397,6 @@ async function clearPreferredDeviceId() {
   clearPreferredDeviceLocalFallback();
 }
 
-async function sendViaHalfPipe(payload) {
-  return chrome.runtime.sendMessage({
-    type: 'ble.command',
-    command: { type: 'halfpipe.send', payload }
-  });
-}
-
-
 function waitForControlHandshake(state) {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
@@ -435,14 +452,9 @@ async function connectAndBind(options = {}) {
         ],
         optionalServices: ['6e400101-b5a3-f393-e0a9-e50e24dccb01']
       },
-      onCommand: async (command) => {
-        debugLog('rx command from BLE', { raw: command });
-        try {
-          await chrome.runtime.sendMessage({ type: 'ble.command', command });
-          debugLog('forwarded ble.command to service worker');
-        } catch {
-          debugLog('failed to forward ble.command');
-          // Background may be unavailable transiently.
+      onCommand: (command) => {
+        if (command?.type === '__ble_raw_bytes' && Array.isArray(command.bytes)) {
+          hp.feedBytes(new Uint8Array(command.bytes));
         }
       }
     });
@@ -457,7 +469,7 @@ async function connectAndBind(options = {}) {
     let handshakeOk = false;
     for (let attempt = 1; attempt <= kHandshakeAttempts; attempt += 1) {
       const handshakePending = waitForControlHandshake(state);
-      await sendViaHalfPipe({ type: 'state.request' });
+      try { await hp.send({ type: 'state.request' }, kTarget.MCP); } catch { /* ignore */ }
       const okAttempt = await handshakePending;
       if (okAttempt) {
         handshakeOk = true;
@@ -592,34 +604,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .catch((err) => sendResponse({ ok: false, error: String(err?.message || err) }));
     return true;
   }
-  if (msg.type === 'ble.control') {
-    const command = msg.command;
-    commandLog('BLE->SW (ctrl)', command);
-    noteControlFrameForHealth(command);
-    if (connectState.pendingHandshake && (command?.type === 'state' || command?.type === 'boot' || typeof command?.ok === 'boolean')) {
-      connectState.pendingHandshake();
-    }
-    sendResponse({ ok: true });
-    return true;
-  }
   if (!msg || msg.target !== 'ble-page') return;
-  if (msg.type === 'ble.postBinary') {
-    const bytes = Array.isArray(msg.bytes) ? Uint8Array.from(msg.bytes) : null;
-    debugLog('ble.postBinary from service worker', {
-      traceId: msg.traceId || null,
-      bytes: bytes?.length || 0
-    });
-    markBridgeActivity('sw_post_binary');
-    postBinary(bytes, { traceId: msg.traceId || null })
-      .then((ok) => {
-        debugLog('ble.postBinary result', { traceId: msg.traceId || null, ok });
-        sendResponse({ ok });
-      })
-      .catch((err) => {
-        const error = String(err?.message || err);
-        debugLog('ble.postBinary error', { traceId: msg.traceId || null, error });
-        sendResponse({ ok: false, error });
-      });
+  if (msg?.type === 'hp.send' && msg.target === 'ble-page') {
+    hp.send(msg.payload, kTarget.MCP)
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ ok: false, error: String(err?.message || err) }));
     return true;
   }
 });

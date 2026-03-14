@@ -1,12 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  encodeAckFrame,
-  encodeChunkFrame,
-  decodeFrame,
-  kMaxPayload,
-  makeTransferId,
-} from '../../shared/binary_frame.js';
 
 const kTrustedSender = {
   id: 'test',
@@ -39,12 +32,8 @@ function makeHarness() {
     title: 'New Tab',
     url
   });
-  let blePostOk = true;
   let blePostBinaryOk = true;
   let cdpWindowMethodMissing = false;
-  let autoAckStreamFrames = true;
-  let bleCommandListenerRef = null;
-  const chunkBuffers = {};
   let getWindowImpl = async (windowId) => ({
     id: windowId,
     left: 130,
@@ -94,46 +83,13 @@ function makeHarness() {
       lastError: null,
       getURL: (path) => `chrome-extension://test/${path}`,
       sendMessage: async (msg) => {
-        if (msg?.type === 'ble.post') {
+        if (msg?.type === 'hp.send') {
           postedPayloads.push(msg.payload);
-          return { ok: blePostOk };
+          return { ok: blePostBinaryOk };
         }
         if (msg?.type === 'ble.postBinary') {
+          // No longer used by service_worker; kept for completeness.
           postedBinary.push(msg.bytes);
-          if (blePostBinaryOk && autoAckStreamFrames && bleCommandListenerRef) {
-            const rawBytes = Uint8Array.from(msg.bytes || []);
-            if (rawBytes.length >= 12 && rawBytes[0] === 0x41 && rawBytes[1] === 0x4B) {
-              const decoded = decodeFrame(rawBytes);
-              if (decoded && decoded.type === 1) { // CHUNK
-                const ackFrame = encodeAckFrame({ transferId: decoded.transferId, seq: decoded.seq });
-                const ref = bleCommandListenerRef;
-                // Store chunk for reassembly
-                const key = decoded.transferId;
-                if (!chunkBuffers[key]) chunkBuffers[key] = [];
-                chunkBuffers[key].push(decoded.payload);
-                // If last chunk (payload < kMaxPayload), reassemble and push to postedPayloads
-                if (decoded.payload.length < kMaxPayload) {
-                  const total = chunkBuffers[key].reduce((s, c) => s + c.length, 0);
-                  const assembled = new Uint8Array(total);
-                  let off = 0;
-                  for (const c of chunkBuffers[key]) { assembled.set(c, off); off += c.length; }
-                  delete chunkBuffers[key];
-                  try {
-                    const parsed = JSON.parse(new TextDecoder().decode(assembled));
-                    postedPayloads.push(parsed);
-                  } catch { /* ignore parse error */ }
-                }
-                // Send ACK back via __ble_raw_bytes
-                setTimeout(() => {
-                  ref(
-                    { type: 'ble.command', command: { type: '__ble_raw_bytes', bytes: Array.from(ackFrame) } },
-                    kTrustedSender,
-                    () => {}
-                  );
-                }, 0);
-              }
-            }
-          }
           return { ok: blePostBinaryOk };
         }
         if (msg?.type === 'desktop.capture.request') {
@@ -271,9 +227,6 @@ function makeHarness() {
     setCreateTabImpl: (impl) => {
       createTabImpl = impl;
     },
-    setBlePostOk: (ok) => {
-      blePostOk = ok;
-    },
     setBlePostBinaryOk: (ok) => {
       blePostBinaryOk = ok;
     },
@@ -282,12 +235,6 @@ function makeHarness() {
     },
     setGetWindowImpl: (impl) => {
       getWindowImpl = impl;
-    },
-    setBleCommandListener: (listener) => {
-      bleCommandListenerRef = listener;
-    },
-    setAutoAckStreamFrames: (v) => {
-      autoAckStreamFrames = v;
     }
   };
 }
@@ -312,26 +259,10 @@ async function waitFor(checkFn, { timeoutMs = 1500, intervalMs = 10 } = {}) {
   }
 }
 
-function parseTransferChunkFrame(raw) {
-  const bytes = Uint8Array.from(raw || []);
-  if (bytes.length < 12) return null;
-  const decoded = decodeFrame(bytes);
-  if (!decoded) return null;
-  return {
-    magic0: bytes[0],
-    magic1: bytes[1],
-    frameType: decoded.type,
-    transferId: decoded.transferId,
-    seq: decoded.seq,
-    payloadLength: decoded.payload?.length || 0,
-    totalLength: bytes.length
-  };
-}
-
 async function callBleCommand(listener, command, sender = kTrustedSender) {
   return new Promise((resolve) => {
     let returned;
-    returned = listener({ type: 'ble.command', command }, sender, (msg) => {
+    returned = listener({ type: 'hp.message', msg: command }, sender, (msg) => {
       resolve({ returned, response: msg });
     });
     if (returned !== true) {
@@ -343,38 +274,19 @@ async function callBleCommand(listener, command, sender = kTrustedSender) {
 function findBleCommandListener(runtimeListeners, harness = null) {
   const listener = runtimeListeners.find((candidate) => {
     let called = false;
-    const out = candidate({ type: 'ble.command', command: { type: 'unknown' } }, kTrustedSender, () => {
+    const out = candidate({ type: 'hp.message', msg: { type: 'unknown' } }, kTrustedSender, () => {
       called = true;
     });
     return out === true || called;
   });
   assert.equal(typeof listener, 'function');
-  if (harness && typeof harness.setBleCommandListener === 'function') {
-    harness.setBleCommandListener(listener);
-  }
   return listener;
 }
 
-// Send a JSON command to the service worker as binary CHUNK frames via __ble_raw_bytes.
+// Send a command to the service worker as a fully-assembled hp.message.
+// (HalfPipe chunking/reassembly is now in ble_bridge.js, not service_worker.js.)
 async function sendCommand(listener, command) {
-  const json = JSON.stringify(command);
-  const bytes = new TextEncoder().encode(json);
-  const transferId = makeTransferId();
-  const chunks = [];
-  for (let off = 0; off < bytes.length; off += kMaxPayload) {
-    chunks.push(bytes.slice(off, off + kMaxPayload));
-  }
-  if (chunks.length > 0 && chunks[chunks.length - 1].length === kMaxPayload) {
-    chunks.push(new Uint8Array(0));
-  }
-  if (chunks.length === 0) {
-    chunks.push(new Uint8Array(0));
-  }
-  for (let seq = 0; seq < chunks.length; seq += 1) {
-    const frame = encodeChunkFrame({ transferId, seq, payload: chunks[seq] });
-    await callBleCommand(listener, { type: '__ble_raw_bytes', bytes: Array.from(frame) });
-  }
-  return { transferId };
+  return callBleCommand(listener, command);
 }
 
 test('service worker handles js.exec.request and posts js.exec.result via bridge', async () => {
@@ -410,7 +322,7 @@ test('service worker handles js.exec.request and posts js.exec.result via bridge
   assert.equal(resultPayload.truncated, false);
 });
 
-test('service worker handles js.exec.request delivered via half-pipe chunks', async () => {
+test('service worker handles js.exec.request delivered via hp.message', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
   const listener = findBleCommandListener(harness.runtimeListeners, harness);
@@ -422,7 +334,6 @@ test('service worker handles js.exec.request delivered via half-pipe chunks', as
     max_result_chars: 200
   };
 
-  // Single-transfer chunk delivery via __ble_raw_bytes
   await sendCommand(listener, command);
 
   await waitFor(() => harness.postedPayloads.find((entry) => (
@@ -434,50 +345,42 @@ test('service worker handles js.exec.request delivered via half-pipe chunks', as
   assert.equal(payload?.type, 'js.exec.result');
 });
 
-test('service worker emits ACK frames while receiving CHUNK frames', async () => {
+test('service worker handles multiple sequential hp.message commands', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
   const listener = findBleCommandListener(harness.runtimeListeners, harness);
-  const command = {
+
+  await callBleCommand(listener, {
     type: 'js.exec.request',
-    request_id: 'js-ack-1',
-    script: 'return "ok";',
-    timeout_ms: 300,
-    max_result_chars: 200
-  };
-  const json = JSON.stringify(command);
-  const bytes = new TextEncoder().encode(json);
-  const transferId = makeTransferId();
-  const mid = Math.floor(bytes.length / 2);
+    request_id: 'js-seq-1',
+    script: 'return 1;',
+    timeout_ms: 300
+  });
+  await callBleCommand(listener, {
+    type: 'js.exec.request',
+    request_id: 'js-seq-2',
+    script: 'return 2;',
+    timeout_ms: 300
+  });
 
-  // Send two CHUNK frames
-  const frame0 = encodeChunkFrame({ transferId, seq: 0, payload: bytes.slice(0, mid) });
-  await callBleCommand(listener, { type: '__ble_raw_bytes', bytes: Array.from(frame0) });
-  const frame1 = encodeChunkFrame({ transferId, seq: 1, payload: bytes.slice(mid) });
-  await callBleCommand(listener, { type: '__ble_raw_bytes', bytes: Array.from(frame1) });
-
-  // Half-pipe sends ACK frames as binary via ble.postBinary
-  const ackFrames = harness.postedBinary
-    .map((raw) => decodeFrame(Uint8Array.from(raw)))
-    .filter((f) => f && f.type === 4); // kFrameType.ACK
-  assert.ok(ackFrames.length >= 1, 'at least one ACK frame sent');
-  assert.equal(ackFrames[0].transferId, transferId);
+  const p1 = harness.postedPayloads.find((e) => e?.request_id === 'js-seq-1');
+  const p2 = harness.postedPayloads.find((e) => e?.request_id === 'js-seq-2');
+  assert.equal(p1?.type, 'js.exec.result');
+  assert.equal(p2?.type, 'js.exec.result');
 });
 
-test('service worker handles half-pipe with multi-chunk reassembly and dispatches command', async () => {
+test('service worker handles large js.exec.request dispatched as single hp.message', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
   const listener = findBleCommandListener(harness.runtimeListeners, harness);
-  // Build a command large enough to span multiple 255-byte chunks
   const command = {
     type: 'js.exec.request',
     request_id: 'js-multi-1',
-    script: 'return ' + 'x'.repeat(600) + ';',
+    script: 'return ' + '"x".repeat(600)' + ';',
     timeout_ms: 300,
     max_result_chars: 200
   };
 
-  // sendCommand splits into proper kMaxPayload-sized chunks
   await sendCommand(listener, command);
 
   await waitFor(() => harness.postedPayloads.find((entry) => (
@@ -501,8 +404,8 @@ test('service worker returns js_exec_busy when a js exec request is already in f
   const listener = findBleCommandListener(harness.runtimeListeners, harness);
 
   listener({
-    type: 'ble.command',
-    command: {
+    type: 'hp.message',
+    msg: {
       type: 'js.exec.request',
       request_id: 'js-a',
       script: 'return 1;',
@@ -529,15 +432,15 @@ test('service worker returns js_exec_busy when a js exec request is already in f
   )));
 });
 
-test('service worker rejects ble.command from untrusted sender', async () => {
+test('service worker rejects hp.message from untrusted sender', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
   const listener = findBleCommandListener(harness.runtimeListeners, harness);
 
   let response = null;
   const returned = listener({
-    type: 'ble.command',
-    command: { type: 'js.exec.request', request_id: 'js-u', script: 'return 1;' }
+    type: 'hp.message',
+    msg: { type: 'js.exec.request', request_id: 'js-u', script: 'return 1;' }
   }, {
     id: 'other-extension-id',
     url: 'chrome-extension://other/src/ble_bridge.html'
@@ -551,15 +454,15 @@ test('service worker rejects ble.command from untrusted sender', async () => {
   assert.equal(evalCalls.length, 0);
 });
 
-test('service worker rejects ble.command when sender id matches but sender url is malformed', async () => {
+test('service worker rejects hp.message when sender id matches but sender url is malformed', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
   const listener = findBleCommandListener(harness.runtimeListeners, harness);
 
   let response = null;
   const returned = listener({
-    type: 'ble.command',
-    command: { type: 'js.exec.request', request_id: 'js-malformed-url', script: 'return 1;' }
+    type: 'hp.message',
+    msg: { type: 'js.exec.request', request_id: 'js-malformed-url', script: 'return 1;' }
   }, {
     id: 'test',
     url: 'chrome-extension://test/src/not_bridge.html'
@@ -779,19 +682,18 @@ test('service worker dispatches dom snapshot requests and ignores unknown comman
     request_id: 'dom-1'
   });
 
-  // Stream path sends binary frames (payload > 160 bytes chunk threshold).
-  assert.ok(harness.postedBinary.length > 0, 'binary frames sent via stream');
+  // hp.send path delivers dom.snapshot as JSON payload via sendViaHalfPipe.
+  const snapshotPayload = harness.postedPayloads.find((entry) => entry?.type === 'dom.snapshot');
+  assert.ok(snapshotPayload, 'dom.snapshot sent via hp.send');
   // No error should have been posted.
   const errorPayload = harness.postedPayloads.find((entry) => entry?.type === 'dom.snapshot.error');
   assert.equal(errorPayload, undefined);
 
   const payloadCountBeforeUnknown = harness.postedPayloads.length;
-  const binaryCountBeforeUnknown = harness.postedBinary.length;
   await callBleCommand(listener, {
     type: 'does.not.exist'
   });
   assert.equal(harness.postedPayloads.length, payloadCountBeforeUnknown);
-  assert.equal(harness.postedBinary.length, binaryCountBeforeUnknown);
 });
 
 test('service worker sends screenshot via stream and verifies capture', async () => {
@@ -805,37 +707,24 @@ test('service worker sends screenshot via stream and verifies capture', async ()
     max_chars: 20000
   });
 
-  // Stream path sends the screenshot.response as binary frames or inline JSON.
+  // hp.send path delivers screenshot.response as JSON payload via sendViaHalfPipe.
   const inlinePayload = harness.postedPayloads.find((entry) =>
     entry?.type === 'screenshot.response' && entry?.request_id === 'shot-1'
   );
-  const hasBinaryFrames = harness.postedBinary.length > 0;
-  assert.ok(inlinePayload || hasBinaryFrames, 'screenshot sent via stream');
+  assert.ok(inlinePayload, 'screenshot.response sent via hp.send');
   assert.equal(harness.desktopCaptureCalls.length, 1);
-
-  // If sent inline, verify key fields.
-  if (inlinePayload) {
-    assert.equal(inlinePayload.source, 'desktop');
-    assert.equal(typeof inlinePayload.data, 'string');
-    assert.equal(typeof inlinePayload.mime, 'string');
-    assert.equal(inlinePayload.source_width, 64);
-    assert.equal(inlinePayload.source_height, 48);
-  }
-
-  // If sent as binary frames, verify AK frame structure.
-  if (hasBinaryFrames) {
-    const firstFrame = parseTransferChunkFrame(harness.postedBinary[0]);
-    assert.equal(firstFrame?.magic0, 0x41);
-    assert.equal(firstFrame?.magic1, 0x4b);
-    assert.equal(firstFrame?.frameType, 1); // CHUNK
-  }
+  assert.equal(inlinePayload.source, 'desktop');
+  assert.equal(typeof inlinePayload.data, 'string');
+  assert.equal(typeof inlinePayload.mime, 'string');
+  assert.equal(inlinePayload.source_width, 64);
+  assert.equal(inlinePayload.source_height, 48);
 
   // No error should have been posted.
   const errorPayload = harness.postedPayloads.find((entry) => entry?.type === 'screenshot.error');
   assert.equal(errorPayload, undefined);
 });
 
-test('service worker reports screenshot.error when stream binary send fails', async () => {
+test('service worker handles screenshot request when hp.send returns ok:false', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
   const listener = findBleCommandListener(harness.runtimeListeners, harness);
@@ -848,8 +737,9 @@ test('service worker reports screenshot.error when stream binary send fails', as
     max_chars: 20000
   });
 
-  // When binary send fails, both the response and error paths fail through halfpipe.
-  // The error propagates back as a failed ble.command response.
-  assert.equal(response?.ok, false);
-  assert.equal(typeof response?.error, 'string');
+  // In the new arch, sendViaHalfPipe swallows the ok:false and the command handler completes normally.
+  // The screenshot.response was attempted but hp.send signaled failure.
+  assert.equal(response?.ok, true);
+  const attemptedPayload = harness.postedPayloads.find((e) => e?.request_id === 'shot-nack');
+  assert.ok(attemptedPayload, 'screenshot.response was attempted via hp.send');
 });

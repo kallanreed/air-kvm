@@ -72,6 +72,44 @@ MCP app code                                    Extension app code
 - One chunk in flight at a time. Firmware backpressure is the flow control.
 - 3 binary control frame types: ack (`0x04`), nack (`0x05`), reset (`0x06`). No JSON in stream protocol.
 
+## Extension Internal Architecture
+
+```mermaid
+flowchart TD
+    FW([Firmware / BLE])
+
+    subgraph BLE_BRIDGE["ble_bridge page (ble_bridge.html + ble_bridge.js)"]
+        BB_BLE["bridge.js\nconnectBle / postBinary\nWeb Bluetooth API"]
+        HP["HalfPipe\nfeedBytes / send\nAK frame chunk/ack/reset"]
+        BB_LOGIC["ble_bridge.js\nconnect · disconnect · status UI\nhandshake / health resolution\nonControl → health + handshake"]
+    end
+
+    subgraph SW["Service Worker (service_worker.js)"]
+        DISPATCH["Command Dispatcher\ntabs · dom · js.exec\nscreenshot · window.bounds"]
+        BROWSER["Browser APIs\nchrome.tabs · chrome.debugger\ncontent_script.js"]
+    end
+
+    %% BLE RX path: firmware → extension
+    FW -->|"BLE notify (raw AK bytes)"| BB_BLE
+    BB_BLE -->|"characteristicvaluechanged\nonCommand() → hp.feedBytes()"| HP
+    HP -->|"onMessage(msg)\nreassembled command object\n{ type:'hp.message', msg }"| DISPATCH
+    HP -->|"onControl(msg)\nCONTROL frames (boot / state)\nhandled locally"| BB_LOGIC
+
+    %% BLE TX path: extension → firmware
+    DISPATCH -->|"sendViaHalfPipe(result)\n{ type:'hp.send', target:'ble-page' }"| HP
+    HP -->|"writeFn(frameBytes)\n→ postBinary(bytes)"| BB_BLE
+    BB_BLE -->|"writeValueWithoutResponse\n(fallback: withResponse)\none AK frame ≤267 bytes"| FW
+
+    %% Browser execution
+    DISPATCH -->|"executeScript / sendMessage"| BROWSER
+    BROWSER -->|"DOM / screenshot / js result"| DISPATCH
+```
+
+**Key flows:**
+- **Inbound (FW → Extension):** BLE notify → `bridge.js` `onCommand` → `hp.feedBytes()` (local) → HalfPipe reassembles → `onMessage` → `{ type:'hp.message' }` to service worker → dispatch.
+- **Outbound (Extension → FW):** handler calls `sendViaHalfPipe(result)` → `{ type:'hp.send' }` message → bridge page → `hp.send()` → `writeFn` → `postBinary()` → BLE write (all local in bridge page).
+- **CONTROL frames** (boot/state from firmware) are handled entirely in the bridge page by `onControl` — health tracking and handshake resolution happen without any service worker round-trip.
+
 ## Data Paths
 
 1. **DOM / tab list / simple commands**: MCP → UART → firmware pass-through → BLE → extension → browser API → response back through same path as inline JSON.

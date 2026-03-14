@@ -2,7 +2,6 @@
 const UART_SERVICE_UUID = '6e400101-b5a3-f393-e0a9-e50e24dccb01';
 const UART_RX_CHAR_UUID = '6e400102-b5a3-f393-e0a9-e50e24dccb01';
 const UART_TX_CHAR_UUID = '6e400103-b5a3-f393-e0a9-e50e24dccb01';
-const kBleWriteChunkBytes = 160;
 const kDebug = true;
 let verboseDebugEnabled = false;
 let debugLogger = null;
@@ -375,16 +374,6 @@ export function disconnectBle() {
 async function ensureConnected(deps = {}) {
   if (rxCharacteristic && bleDevice?.gatt?.connected) return true;
   return connectBle(deps);
-}
-
-async function writeBytesChunked(writeFn, bytes, chunkBytes = kBleWriteChunkBytes) {
-  if (!(bytes instanceof Uint8Array)) throw new Error('invalid_bytes');
-  if (bytes.length === 0) return;
-  const step = Math.max(1, chunkBytes);
-  for (let offset = 0; offset < bytes.length; offset += step) {
-    const end = Math.min(bytes.length, offset + step);
-    await writeFn(bytes.slice(offset, end));
-  }
 }
 
 // Shared write-with-fallback-and-telemetry helper used by postBinary.
