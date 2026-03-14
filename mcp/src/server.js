@@ -124,56 +124,26 @@ export function createServer({ transport, send }) {
     }
 
     const command = tool.build(args);
-    const timeoutMs = name === 'airkvm_dom_snapshot' ? 60000
-      : (name === 'airkvm_screenshot_tab' || name === 'airkvm_screenshot_desktop') ? 30000
-      : 30000;
+    const timeoutMs = tool.timeoutMs ?? 30000;
 
-    transport.send(command, tool, { timeoutMs }).then((msg) => {
-      // Local tools (fw/hid) return { ok, msg }; extension tools return msg directly.
-      const isLocal = tool.target === 'fw' || tool.target === 'hid';
-      const response = isLocal ? msg.msg : msg;
-      const ok = isLocal ? msg.ok : !(msg?.ok === false || msg?.error);
-
+    transport.send(command, tool, { timeoutMs }).then(({ ok, data }) => {
       if (!ok) {
         send({
           jsonrpc: '2.0', id,
           result: makeToolResultJson({
             request_id: command.request_id || null,
-            error: response?.error || 'device_error',
-            detail: response
+            error: data?.error || 'device_error',
+            detail: data
           }),
           isError: true
         });
         return;
       }
 
-      // TODO: Clunky AF
-      // Local commands: return brief confirmation with any state payload.
-      if (isLocal) {
-        const detail = response?.type === 'state' || response?.type === 'fw.version'
-          ? `; response=${JSON.stringify(response)}`
-          : '';
-        send({ jsonrpc: '2.0', id, result: makeToolResultText(`forwarded ${JSON.stringify(command)}${detail}`) });
-        return;
-      }
-
-      let data;
-      if (name === 'airkvm_dom_snapshot') {
-        data = { request_id: command.request_id, snapshot: response };
-      } else if (isScreenshotTool(name)) {
-        data = {
-          request_id: command.request_id,
-          source: response.source || command.source,
-          mime: response.mime || 'image/jpeg',
-          base64: response.data || response.base64 || '',
-        };
-      } else {
-        data = response;
-      }
-
+      const shaped = tool.formatData ? tool.formatData(command, data) : data;
       send({
         jsonrpc: '2.0', id,
-        result: makeToolResultJson(maybePersistScreenshot(name, data))
+        result: makeToolResultJson(maybePersistScreenshot(name, shaped))
       });
     }).catch((err) => {
       const diagnostics = buildDiagnostics(err);

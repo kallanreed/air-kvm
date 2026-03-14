@@ -131,7 +131,7 @@ test('send (extension tool) sends CHUNK frames and resolves on message', async (
   }, 10);
 
   const result = await pending;
-  assert.equal(result.type, 'tabs.list');
+  assert.equal(result.data.type, 'tabs.list');
   transport.close();
 });
 
@@ -170,8 +170,9 @@ test('send (fw tool) uses matchResponse for non-ok state shape', async () => {
   }, 10);
 
   const result = await pending;
-  assert.equal(result.msg.type, 'state');
-  assert.equal(result.msg.busy, false);
+  assert.equal(result.ok, true);
+  assert.equal(result.data.type, 'state');
+  assert.equal(result.data.busy, false);
   transport.close();
 });
 

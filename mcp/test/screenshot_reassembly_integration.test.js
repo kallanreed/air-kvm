@@ -29,11 +29,14 @@ async function callScreenshotTool(server, requestId, extraArgs = {}) {
 test('screenshot via transport.send returns base64 payload', async () => {
   const fakeBase64 = Buffer.from('fakeImageData').toString('base64');
   const { sent, server } = makeHarness(async () => ({
-    type: 'screenshot.response',
-    request_id: 'shot-stream-1',
-    source: 'tab',
-    data: fakeBase64,
-    mime: 'image/jpeg',
+    ok: true,
+    data: {
+      type: 'screenshot.response',
+      request_id: 'shot-stream-1',
+      source: 'tab',
+      data: fakeBase64,
+      mime: 'image/jpeg',
+    }
   }));
 
   await callScreenshotTool(server, 'shot-stream-1', { max_chars: 200000 });
@@ -59,11 +62,14 @@ test('screenshot transport timeout surfaces as transport_error', async () => {
 
 test('screenshot.error is surfaced as structured tool error', async () => {
   const { sent, server } = makeHarness(async () => ({
-    type: 'screenshot.error',
-    request_id: 'shot-err-1',
-    source: 'tab',
     ok: false,
-    error: 'desktop_capture_denied',
+    data: {
+      type: 'screenshot.error',
+      request_id: 'shot-err-1',
+      source: 'tab',
+      ok: false,
+      error: 'desktop_capture_denied',
+    }
   }));
 
   await callScreenshotTool(server, 'shot-err-1');

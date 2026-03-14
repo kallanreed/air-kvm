@@ -52,17 +52,17 @@ test.after(async () => {
 itest('fw_version_request returns version string', async () => {
   const t = getTool('airkvm_fw_version_request');
   const result = await transport.send(t.build(), t);
-  assert.equal(result.msg.type, 'fw.version');
-  assert.equal(typeof result.msg.version, 'string');
-  assert.ok(result.msg.version.length > 0);
-  assert.equal(typeof result.msg.built_at, 'string');
+  assert.equal(result.data.type, 'fw.version');
+  assert.equal(typeof result.data.version, 'string');
+  assert.ok(result.data.version.length > 0);
+  assert.equal(typeof result.data.built_at, 'string');
 });
 
 itest('state_request returns state with busy flag', async () => {
   const t = getTool('airkvm_state_request');
   const result = await transport.send(t.build(), t);
-  assert.equal(result.msg.type, 'state');
-  assert.equal(typeof result.msg.busy, 'boolean');
+  assert.equal(result.data.type, 'state');
+  assert.equal(typeof result.data.busy, 'boolean');
 });
 
 itest('state_set busy=true then busy=false roundtrips correctly', async () => {
@@ -73,13 +73,13 @@ itest('state_set busy=true then busy=false roundtrips correctly', async () => {
   assert.equal(setTrue.ok, true);
 
   const stateAfterTrue = await transport.send(stateReq.build(), stateReq);
-  assert.equal(stateAfterTrue.msg.busy, true);
+  assert.equal(stateAfterTrue.data.busy, true);
 
   const setFalse = await transport.send(t.build({ busy: false }), t);
   assert.equal(setFalse.ok, true);
 
   const stateAfterFalse = await transport.send(stateReq.build(), stateReq);
-  assert.equal(stateAfterFalse.msg.busy, false);
+  assert.equal(stateAfterFalse.data.busy, false);
 });
 
 // -- HID tools ---------------------------------------------------------------
@@ -164,14 +164,14 @@ itest('key_tap with unrecognized key returns command_rejected', async () => {
   const t = getTool('airkvm_key_tap');
   const result = await transport.send(t.build({ key: 'NotARealKey' }), t);
   assert.equal(result.ok, false);
-  assert.equal(result.msg.error, 'command_rejected');
+  assert.equal(result.data.error, 'command_rejected');
 });
 
 itest('mouse_click with invalid button returns command_rejected', async () => {
   const t = getTool('airkvm_mouse_click');
   const result = await transport.send(t.build({ button: 'bogus_button' }), t);
   assert.equal(result.ok, false);
-  assert.equal(result.msg.error, 'command_rejected');
+  assert.equal(result.data.error, 'command_rejected');
 });
 
 // -- RESET frame recovery ----------------------------------------------------
@@ -181,7 +181,7 @@ itest('RESET frame clears parser state; firmware responds normally after', async
   // Firmware must still handle commands correctly after a RESET
   const t = getTool('airkvm_fw_version_request');
   const result = await transport.send(t.build(), t);
-  assert.equal(result.msg.type, 'fw.version');
+  assert.equal(result.data.type, 'fw.version');
 });
 
 // -- EXTENSION target routing ------------------------------------------------

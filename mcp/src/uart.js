@@ -87,7 +87,7 @@ export class UartTransport {
     if (p?.isLocal && p.matchResponse(msg)) {
       this._pending = null;
       clearTimeout(p.timer);
-      p.resolve({ ok: msg?.ok !== false, msg });
+      p.resolve({ ok: msg?.ok !== false, data: msg });
     }
   }
 
@@ -96,7 +96,7 @@ export class UartTransport {
     if (p && !p.isLocal) {
       this._pending = null;
       clearTimeout(p.timer);
-      p.resolve(msg);
+      p.resolve({ ok: !(msg?.ok === false || msg?.error), data: msg });
     }
   }
 

@@ -191,6 +191,7 @@ const TOOL_DEFINITIONS = [
   {
     name: 'airkvm_dom_snapshot',
     target: 'extension',
+    timeoutMs: 60000,
     description: 'Request a DOM snapshot from the target extension over the AirKVM transport.',
     inputSchema: {
       type: 'object',
@@ -199,7 +200,8 @@ const TOOL_DEFINITIONS = [
       },
       required: []
     },
-    build: (args) => ({ type: 'dom.snapshot.request', request_id: reqId(args) })
+    build: (args) => ({ type: 'dom.snapshot.request', request_id: reqId(args) }),
+    formatData: (cmd, data) => ({ request_id: cmd.request_id, snapshot: data })
   },
   {
     name: 'airkvm_exec_js_tab',
@@ -227,6 +229,7 @@ const TOOL_DEFINITIONS = [
   {
     name: 'airkvm_screenshot_tab',
     target: 'extension',
+    timeoutMs: 30000,
     description: 'Request a tab screenshot from the target extension over the AirKVM transport.',
     inputSchema: {
       type: 'object',
@@ -241,11 +244,18 @@ const TOOL_DEFINITIONS = [
       },
       required: []
     },
-    build: (args) => ({ type: 'screenshot.request', source: 'tab', request_id: reqId(args), ...screenshotOpts(args) })
+    build: (args) => ({ type: 'screenshot.request', source: 'tab', request_id: reqId(args), ...screenshotOpts(args) }),
+    formatData: (cmd, data) => ({
+      request_id: cmd.request_id,
+      source: data.source || cmd.source,
+      mime: data.mime || 'image/jpeg',
+      base64: data.data || data.base64 || '',
+    })
   },
   {
     name: 'airkvm_screenshot_desktop',
     target: 'extension',
+    timeoutMs: 30000,
     description: 'Request a desktop screenshot from the target extension over the AirKVM transport.',
     inputSchema: {
       type: 'object',
@@ -268,7 +278,13 @@ const TOOL_DEFINITIONS = [
       const command = { type: 'screenshot.request', source: 'desktop', request_id: reqId(args), ...screenshotOpts(args) };
       if (Number.isInteger(args?.desktop_delay_ms)) command.desktop_delay_ms = args.desktop_delay_ms;
       return command;
-    }
+    },
+    formatData: (cmd, data) => ({
+      request_id: cmd.request_id,
+      source: data.source || cmd.source,
+      mime: data.mime || 'image/jpeg',
+      base64: data.data || data.base64 || '',
+    })
   }
 ];
 
