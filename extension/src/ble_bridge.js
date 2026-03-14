@@ -1,9 +1,8 @@
-// Bridge page script: owns the HalfPipe instance and the BLE connection lifecycle.
-// Runs in the ble_bridge.html tab (a regular browser page with Web Bluetooth access).
-// Inbound BLE bytes are fed directly into HalfPipe; reassembled messages are forwarded
-// to the service worker as { type:'hp.message' }. The service worker sends outbound
-// payloads back here as { type:'hp.send' } for HalfPipe to chunk and write to BLE.
-// Also manages connect/disconnect UI, health watchdog, and handshake resolution.
+// Transport layer for ble_bridge.html: owns the HalfPipe instance, BLE connection lifecycle,
+// health watchdog, and preferred-device persistence. UI helpers are imported from ble_bridge_ui.js.
+// Outbound payloads arrive from the service worker as { type:'hp.send' } and are chunked via
+// HalfPipe to BLE; inbound BLE bytes are fed into HalfPipe and reassembled messages are
+// forwarded to the SW as { type:'hp.message' }.
 import { HalfPipe } from '../../shared/halfpipe.js';
 import { kTarget } from '../../shared/binary_frame.js';
 import {
@@ -15,29 +14,27 @@ import {
   setBleVerboseDebug,
   setBleDebugLogger
 } from './bridge.js';
+import {
+  debugLog, infoLog, setStatus, setControlsDisabled,
+  refreshAutoscrollButton, refreshVerboseButton,
+  loadVerboseLoggingPref, persistVerboseLoggingPref,
+  isVerboseLoggingEnabled, setVerboseLoggingEnabled,
+  isAutoScrollEnabled, setAutoScrollEnabled,
+  captureDesktopDataUrl, appendStampedLog,
+  connectBtn, disconnectBtn, forgetBtn, reconnectBtn,
+  clearLogBtn, toggleAutoscrollBtn, toggleVerboseBtn, logEl,
+  clearLog
+} from './ble_bridge_ui.js';
 
-const statusEl = document.getElementById('status');
-const connectBtn = document.getElementById('connect');
-const disconnectBtn = document.getElementById('disconnect');
-const forgetBtn = document.getElementById('forget');
-const reconnectBtn = document.getElementById('reconnect');
-const clearLogBtn = document.getElementById('clear-log');
-const toggleAutoscrollBtn = document.getElementById('toggle-autoscroll');
-const toggleVerboseBtn = document.getElementById('toggle-verbose');
-const logEl = document.getElementById('log');
-const kDebug = true;
-const kVerbosePrefStorageKey = 'airkvmVerboseBridgeLog';
 const kHandshakeTimeoutMs = 6000;
 const kHandshakeAttempts = 3;
 const kPreferredDeviceStorageKey = 'blePreferredDeviceId';
 const kPreferredDeviceNameStorageKey = 'blePreferredDeviceName';
-const kMaxLogLines = 250;
 const kHealthPingIntervalMs = 6000;
 const kHealthPingTimeoutMs = 4000;
 const kHealthMaxMisses = 4;
 const kHealthSuspendMsDom = 15000;
 const kHealthSuspendMsScreenshot = 45000;
-let logLines = [];
 let connectInFlight = false;
 let disconnectInFlight = false;
 let healthTimer = null;
@@ -48,8 +45,6 @@ let healthState = {
   lastActivityAt: 0
 };
 let lastCommandContext = null;
-let autoScrollEnabled = true;
-let verboseLoggingEnabled = false;
 let connectState = { pendingHandshake: null };
 
 const hp = new HalfPipe({
@@ -72,87 +67,6 @@ hp.onControl((msg) => {
 hp.onLog((text) => {
   debugLog('[fw-log]', text);
 });
-
-function loadVerboseLoggingPref() {
-  try {
-    return globalThis.localStorage?.getItem(kVerbosePrefStorageKey) === '1';
-  } catch {
-    return false;
-  }
-}
-
-function persistVerboseLoggingPref() {
-  try {
-    globalThis.localStorage?.setItem(kVerbosePrefStorageKey, verboseLoggingEnabled ? '1' : '0');
-  } catch {
-    // Non-fatal.
-  }
-}
-
-function refreshAutoscrollButton() {
-  if (!toggleAutoscrollBtn) return;
-  toggleAutoscrollBtn.textContent = `Auto-scroll: ${autoScrollEnabled ? 'ON' : 'OFF'}`;
-  toggleAutoscrollBtn.setAttribute('aria-pressed', autoScrollEnabled ? 'true' : 'false');
-}
-
-function refreshVerboseButton() {
-  if (!toggleVerboseBtn) return;
-  toggleVerboseBtn.textContent = `Verbose: ${verboseLoggingEnabled ? 'ON' : 'OFF'}`;
-  toggleVerboseBtn.setAttribute('aria-pressed', verboseLoggingEnabled ? 'true' : 'false');
-}
-
-function appendLog(line) {
-  if (!logEl) return;
-  const kAutoScrollThresholdPx = 16;
-  const wasNearBottom =
-    logEl.scrollTop + logEl.clientHeight >= (logEl.scrollHeight - kAutoScrollThresholdPx);
-  logLines.push(line);
-  const row = document.createElement('div');
-  row.className = 'log-row';
-  row.textContent = line;
-  logEl.appendChild(row);
-
-  if (logLines.length > kMaxLogLines) {
-    const overflow = logLines.length - kMaxLogLines;
-    logLines = logLines.slice(overflow);
-    for (let i = 0; i < overflow; i += 1) {
-      if (logEl.firstChild) {
-        logEl.removeChild(logEl.firstChild);
-      }
-    }
-  }
-  if (autoScrollEnabled && wasNearBottom) {
-    logEl.scrollTop = logEl.scrollHeight;
-  }
-}
-
-function renderLogParts(parts) {
-  return parts.map((part) => {
-    if (typeof part === 'string') return part;
-    try {
-      return JSON.stringify(part);
-    } catch {
-      return String(part);
-    }
-  }).join(' ');
-}
-
-function appendStampedLog(prefix, parts) {
-  const rendered = renderLogParts(parts);
-  const line = prefix ? `${prefix} ${rendered}` : rendered;
-  appendLog(`${new Date().toISOString()} ${line}`);
-}
-
-function debugLog(...args) {
-  if (!verboseLoggingEnabled) return;
-  if (!kDebug) return;
-  console.log('[airkvm-bridge]', ...args);
-  appendStampedLog('', args);
-}
-
-function infoLog(...args) {
-  appendStampedLog('', args);
-}
 
 function summarizeCommand(frame) {
   if (!frame || typeof frame !== 'object') return { type: 'unknown' };
@@ -189,24 +103,15 @@ function commandLog(direction, frame) {
     transfer_id: typeof frame?.transfer_id === 'string' ? frame.transfer_id : null,
     ts: Date.now()
   };
-  if (!verboseLoggingEnabled && direction === 'SW->BLE') return;
-  if (!verboseLoggingEnabled && isVerboseOnlyCommand(frame)) return;
+  if (!isVerboseLoggingEnabled() && direction === 'SW->BLE') return;
+  if (!isVerboseLoggingEnabled() && isVerboseOnlyCommand(frame)) return;
   infoLog(`[cmd] ${direction}`, summarizeCommand(frame));
 }
 
 setBleDebugLogger((...args) => {
-  if (!verboseLoggingEnabled) return;
+  if (!isVerboseLoggingEnabled()) return;
   appendStampedLog('[ble]', args);
 });
-
-function setStatus(text) {
-  if (statusEl) statusEl.textContent = text;
-}
-
-function setControlsDisabled(disabled) {
-  if (connectBtn) connectBtn.disabled = disabled;
-  if (reconnectBtn) reconnectBtn.disabled = disabled;
-}
 
 function stopHealthWatchdog() {
   if (healthTimer) {
@@ -261,7 +166,7 @@ function markBridgeActivity(reason = 'activity') {
   if (healthState.pendingPingResolve) {
     healthState.pendingPingResolve(true);
   }
-  if (verboseLoggingEnabled) {
+  if (isVerboseLoggingEnabled()) {
     debugLog('health activity', { reason });
   }
 }
@@ -545,34 +450,26 @@ reconnectBtn?.addEventListener('click', async () => {
   await connectAndBind({ allowChooserFallback: true, trigger: 'manual' });
 });
 
-clearLogBtn?.addEventListener('click', () => {
-  logLines = [];
-  if (logEl) logEl.replaceChildren();
-});
+clearLogBtn?.addEventListener('click', () => { clearLog(); });
 
 toggleAutoscrollBtn?.addEventListener('click', () => {
-  autoScrollEnabled = !autoScrollEnabled;
+  setAutoScrollEnabled(!isAutoScrollEnabled());
   refreshAutoscrollButton();
 });
 
 toggleVerboseBtn?.addEventListener('click', async () => {
-  verboseLoggingEnabled = !verboseLoggingEnabled;
-  setBleVerboseDebug(verboseLoggingEnabled);
+  setVerboseLoggingEnabled(!isVerboseLoggingEnabled());
+  setBleVerboseDebug(isVerboseLoggingEnabled());
   persistVerboseLoggingPref();
   refreshVerboseButton();
-  infoLog('verbose logging', { enabled: verboseLoggingEnabled });
+  infoLog('verbose logging', { enabled: isVerboseLoggingEnabled() });
   try {
-    await chrome.runtime.sendMessage({
-      type: 'airkvm.debug.set',
-      verbose: verboseLoggingEnabled
-    });
-  } catch {
-    // Non-fatal.
-  }
+    await chrome.runtime.sendMessage({ type: 'airkvm.debug.set', verbose: isVerboseLoggingEnabled() });
+  } catch { /* Non-fatal. */ }
 });
 
-verboseLoggingEnabled = loadVerboseLoggingPref();
-setBleVerboseDebug(verboseLoggingEnabled);
+setVerboseLoggingEnabled(loadVerboseLoggingPref());
+setBleVerboseDebug(isVerboseLoggingEnabled());
 notifySw('bridge_loaded');
 infoLog('bridge_loaded');
 refreshAutoscrollButton();
@@ -598,66 +495,3 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 });
 
-async function captureDesktopDataUrl(options = {}) {
-  const delayMs = Number.isInteger(options.desktopDelayMs)
-    ? Math.max(0, Math.min(5000, options.desktopDelayMs))
-    : 0;
-  if (!chrome.desktopCapture?.chooseDesktopMedia) {
-    throw new Error('desktop_capture_unavailable');
-  }
-
-  const streamId = await new Promise((resolve, reject) => {
-    chrome.desktopCapture.chooseDesktopMedia(['screen', 'window'], (id) => {
-      if (!id) {
-        reject(new Error('desktop_capture_denied'));
-        return;
-      }
-      resolve(id);
-    });
-  });
-
-  const stream = await getUserMediaCompat({
-    audio: false,
-    video: {
-      mandatory: {
-        chromeMediaSource: 'desktop',
-        chromeMediaSourceId: streamId
-      }
-    }
-  });
-
-  try {
-    if (delayMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-    }
-    const [track] = stream.getVideoTracks();
-    if (!track) throw new Error('desktop_capture_no_track');
-    const imageCapture = new ImageCapture(track);
-    const bitmap = await imageCapture.grabFrame();
-    const canvas = document.createElement('canvas');
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('desktop_capture_canvas_unavailable');
-    ctx.drawImage(bitmap, 0, 0);
-    return canvas.toDataURL('image/png');
-  } finally {
-    stream.getTracks().forEach((t) => t.stop());
-  }
-}
-
-function getUserMediaCompat(constraints) {
-  const modern = globalThis.navigator?.mediaDevices?.getUserMedia;
-  if (typeof modern === 'function') {
-    return modern.call(globalThis.navigator.mediaDevices, constraints);
-  }
-  const legacy = globalThis.navigator?.getUserMedia
-    || globalThis.navigator?.webkitGetUserMedia
-    || globalThis.navigator?.mozGetUserMedia;
-  if (typeof legacy !== 'function') {
-    throw new Error('desktop_capture_media_unavailable');
-  }
-  return new Promise((resolve, reject) => {
-    legacy.call(globalThis.navigator, constraints, resolve, reject);
-  });
-}
