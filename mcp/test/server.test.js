@@ -32,6 +32,7 @@ test('tools/list includes structured tools', () => {
     'airkvm_state_set',
     'airkvm_fw_version_request',
     'airkvm_transfer_reset',
+    'airkvm_save_image',
     'airkvm_list_tabs',
     'airkvm_window_bounds',
     'airkvm_open_tab',
@@ -277,4 +278,52 @@ test('device error response surfaces as structured error', async () => {
   assert.equal(sent[0].isError, true);
   const payload = JSON.parse(sent[0].result.content[0].text);
   assert.equal(payload.error, 'no_tab');
+});
+
+import os from 'node:os';
+import fs from 'node:fs';
+import path from 'node:path';
+
+test('airkvm_save_image writes file and returns saved_path and saved_bytes', () => {
+  const { sent, server } = makeHarness();
+  const fakeBase64 = Buffer.from('fake image data').toString('base64');
+  const filePath = path.join(os.tmpdir(), `airkvm_test_${Date.now()}.jpg`);
+
+  server.handleRequest({
+    jsonrpc: '2.0', id: 10,
+    method: 'tools/call',
+    params: { name: 'airkvm_save_image', arguments: { base64: fakeBase64, mime: 'image/jpeg', path: filePath } }
+  });
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].isError, undefined);
+  const result = JSON.parse(sent[0].result.content[0].text);
+  assert.equal(result.saved_path, filePath);
+  assert.equal(result.saved_bytes, Buffer.from(fakeBase64, 'base64').length);
+  assert.ok(fs.existsSync(filePath));
+  fs.unlinkSync(filePath);
+});
+
+test('airkvm_save_image missing required fields returns error', () => {
+  const { sent, server } = makeHarness();
+  server.handleRequest({
+    jsonrpc: '2.0', id: 11,
+    method: 'tools/call',
+    params: { name: 'airkvm_save_image', arguments: { base64: 'abc', mime: 'image/jpeg' } }
+  });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].isError, true);
+});
+
+test('airkvm_save_image bad base64 surfaces save_failed error', () => {
+  const { sent, server } = makeHarness();
+  server.handleRequest({
+    jsonrpc: '2.0', id: 12,
+    method: 'tools/call',
+    params: { name: 'airkvm_save_image', arguments: { base64: 'ok', mime: 'image/jpeg', path: '/no/such/dir/that/cannot/be/created/x/y/z/img.jpg' } }
+  });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].isError, true);
+  const result = JSON.parse(sent[0].result.content[0].text);
+  assert.equal(result.error, 'save_failed');
 });

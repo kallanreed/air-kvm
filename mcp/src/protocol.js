@@ -140,6 +140,19 @@ const TOOL_DEFINITIONS = [
     build: () => ({ type: 'transfer.reset' })
   },
   {
+    name: 'airkvm_save_image',
+    description: 'Save a base64-encoded image to a file path on the host machine.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        base64: { type: 'string' },
+        mime: { type: 'string' },
+        path: { type: 'string' }
+      },
+      required: ['base64', 'mime', 'path']
+    }
+  },
+  {
     name: 'airkvm_list_tabs',
     target: 'extension',
     description: 'List automatable browser tabs available on the target extension.',

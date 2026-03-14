@@ -1,16 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import {
   getTool,
   listTools,
   validateArgs
 } from './protocol.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const kTempDir = path.resolve(__dirname, '../../temp'); // TODO: parameter
 
 function makeToolResultText(text) {
   return { content: [{ type: 'text', text }] };
@@ -20,41 +15,14 @@ function makeToolResultJson(payload) {
   return makeToolResultText(JSON.stringify(payload));
 }
 
-function sanitizeSegment(value, fallback) {
-  const text = typeof value === 'string' && value.length > 0 ? value : fallback;
-  return text.replace(/[^a-zA-Z0-9._-]+/g, '_');
+function saveImage(base64, mime, filePath) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const bytes = Buffer.from(base64, 'base64');
+  fs.writeFileSync(filePath, bytes);
+  return { saved_path: filePath, saved_bytes: bytes.length };
 }
 
-function extensionForMime(mime) {
-  if (mime === 'image/jpeg') return 'jpg';
-  if (mime === 'image/png') return 'png';
-  if (mime === 'image/webp') return 'webp';
-  return 'bin';
-}
-
-function maybePersistScreenshot(data) {
-  if (process.env.AIRKVM_SAVE_SCREENSHOTS !== '1') return data;
-  if (!data || typeof data.base64 !== 'string' || data.base64.length === 0) return data;
-  try {
-    // TODO(kyle): Remove test-only screenshot autosave once b64z transfer reliability validation is complete.
-    fs.mkdirSync(kTempDir, { recursive: true });
-    const ext = extensionForMime(data.mime);
-    const source = sanitizeSegment(data.source || 'unknown', 'unknown');
-    const requestId = sanitizeSegment(data.request_id || 'screenshot', 'screenshot');
-    const filePath = path.join(kTempDir, `${requestId}-${source}-${Date.now()}.${ext}`);
-    const bytes = Buffer.from(data.base64, 'base64');
-    fs.writeFileSync(filePath, bytes);
-    return { ...data, saved_path: filePath, saved_bytes: bytes.length };
-  } catch (err) {
-    return { ...data, save_error: String(err?.message || err) };
-  }
-}
-
-function prepareToolResult(tool, command, data) {
-  const shaped = tool.formatData ? tool.formatData(command, data) : data;
-  return maybePersistScreenshot(shaped);
-}
-
+// TODO: DEAD
 function compactFrame(frame) {
   if (!frame || typeof frame !== 'object') return frame;
   if (frame.kind === 'log') return { kind: 'log', msg: frame.msg };
@@ -123,6 +91,16 @@ export function createServer({ transport, send }) {
       return;
     }
 
+    if (name === 'airkvm_save_image') {
+      try {
+        const result = saveImage(args.base64, args.mime, args.path);
+        send({ jsonrpc: '2.0', id, result: makeToolResultJson(result) });
+      } catch (err) {
+        send({ jsonrpc: '2.0', id, result: makeToolResultJson({ error: 'save_failed', detail: err.message }), isError: true });
+      }
+      return;
+    }
+
     const command = tool.build(args);
     const timeoutMs = tool.timeoutMs ?? 8000;
 
@@ -142,7 +120,7 @@ export function createServer({ transport, send }) {
 
       send({
         jsonrpc: '2.0', id,
-        result: makeToolResultJson(prepareToolResult(tool, command, data))
+        result: makeToolResultJson(tool.formatData ? tool.formatData(command, data) : data)
       });
     }).catch((err) => {
       const diagnostics = buildDiagnostics(err);
