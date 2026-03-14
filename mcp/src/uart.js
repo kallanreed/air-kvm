@@ -16,6 +16,8 @@ export class UartTransport {
     this.serialPort = null;
     this.opened = false;
     this.halfpipe = null;
+    this._pending = null; // { isLocal, matchResponse, resolve, reject, timer }
+    this._callQueue = Promise.resolve(); // serializes concurrent send() calls
   }
 
   async open() {
@@ -54,11 +56,17 @@ export class UartTransport {
         ackTarget: kTarget.EXTENSION,
         log: (msg) => this.log(`[halfpipe] ${msg}`),
       });
+
+      this.halfpipe.onControl((msg) => this._handleControl(msg));
+      this.halfpipe.onMessage((msg) => this._handleMessage(msg));
     }
 
     this.serialPort.on('data', (chunk) => {
       this.halfpipe.feedBytes(chunk);
     });
+
+    // Flush any partial stream state left on the firmware's UART parser.
+    await this.halfpipe.reset();
   }
 
   log(msg) {
@@ -66,56 +74,67 @@ export class UartTransport {
     process.stderr.write(`[uart] ${msg}\n`);
   }
 
+  _handleControl(msg) {
+    if (msg?.type === 'boot') {
+      this.log('firmware reboot detected, resetting halfpipe');
+      const p = this._pending;
+      this._pending = null;
+      if (p) { clearTimeout(p.timer); p.reject(new Error('firmware_rebooted')); }
+      this.halfpipe.reset().catch(() => {});
+      return;
+    }
+    const p = this._pending;
+    if (p?.isLocal && p.matchResponse(msg)) {
+      this._pending = null;
+      clearTimeout(p.timer);
+      p.resolve({ ok: msg?.ok !== false, msg });
+    }
+  }
+
+  _handleMessage(msg) {
+    const p = this._pending;
+    if (p && !p.isLocal) {
+      this._pending = null;
+      clearTimeout(p.timer);
+      p.resolve(msg);
+    }
+  }
+
   // Send a command and wait for the response.
   // FW and HID tools → sendControl (single CONTROL frame, firmware handles locally, response via onControl).
   // Extension tools → send (CHUNK frames relayed to extension over BLE, response via onMessage).
-  async send(command, tool, { timeoutMs = this.commandTimeoutMs } = {}) {
-    await this.open();
-    const isLocal = tool.target === 'fw' || tool.target === 'hid';
-    const halfpipeTarget = tool.target === 'fw' ? kTarget.FW
-      : tool.target === 'hid' ? kTarget.HID
-      : kTarget.EXTENSION;
+  send(command, tool, { timeoutMs = this.commandTimeoutMs } = {}) {
+    const run = async () => {
+      await this.open();
+      const isLocal = tool.target === 'fw' || tool.target === 'hid';
+      const halfpipeTarget = tool.target === 'fw' ? kTarget.FW
+        : tool.target === 'hid' ? kTarget.HID
+        : kTarget.EXTENSION;
+      const matchResponse = tool.matchResponse ?? ((msg) => typeof msg?.ok === 'boolean');
 
-    return new Promise((resolve, reject) => {
-      let done = false;
-      let timer = null;
-      const finish = (fn, val) => {
-        if (done) return;
-        done = true;
-        if (timer) clearTimeout(timer);
-        fn(val);
-      };
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          this.log(`send timeout command=${JSON.stringify(command)}`);
+          this._pending = null;
+          reject(new Error('device_timeout'));
+        }, timeoutMs);
 
-      const prevCb = isLocal ? this.halfpipe._controlHandler : this.halfpipe._messageHandler;
-      const setHandler = isLocal
-        ? (cb) => this.halfpipe.onControl(cb)
-        : (cb) => this.halfpipe.onMessage(cb);
+        this._pending = { isLocal, matchResponse, resolve, reject, timer };
 
-      timer = setTimeout(() => {
-        this.log(`send timeout command=${JSON.stringify(command)}`);
-        if (this.halfpipe) setHandler(prevCb);
-        finish(reject, new Error('device_timeout'));
-      }, timeoutMs);
+        const sendPromise = isLocal
+          ? this.halfpipe.sendControl(command, halfpipeTarget)
+          : this.halfpipe.send(command, halfpipeTarget);
 
-      setHandler((msg) => {
-        const matches = tool.matchResponse
-          ? tool.matchResponse(msg)
-          : typeof msg?.ok === 'boolean';
-        if (!isLocal || matches) {
-          setHandler(prevCb);
-          finish(resolve, isLocal ? { ok: msg?.ok !== false, msg } : msg);
-        }
+        sendPromise.catch((err) => {
+          if (this._pending) { clearTimeout(this._pending.timer); this._pending = null; }
+          reject(err);
+        });
       });
+    };
 
-      const sendPromise = isLocal
-        ? this.halfpipe.sendControl(command, halfpipeTarget)
-        : this.halfpipe.send(command, halfpipeTarget);
-
-      sendPromise.catch((err) => {
-        if (this.halfpipe) setHandler(prevCb);
-        finish(reject, err);
-      });
-    });
+    const next = this._callQueue.then(run, run);
+    this._callQueue = next.catch(() => {});
+    return next;
   }
 
   close() {

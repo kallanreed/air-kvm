@@ -127,7 +127,7 @@ test('send (extension tool) sends CHUNK frames and resolves on message', async (
   );
 
   setTimeout(() => {
-    transport.halfpipe._messageHandler({ type: 'tabs.list', request_id: 'tl-1', tabs: [] });
+    transport._handleMessage({ type: 'tabs.list', request_id: 'tl-1', tabs: [] });
   }, 10);
 
   const result = await pending;
@@ -142,7 +142,7 @@ test('send (fw tool) sends CONTROL frame and resolves on ok response', async () 
   const pending = transport.send({ type: 'mouse.click', button: 'left' }, fwTool, { timeoutMs: 200 });
 
   setTimeout(() => {
-    transport.halfpipe._controlHandler({ ok: true });
+    transport._handleControl({ ok: true });
   }, 10);
 
   const result = await pending;
@@ -166,7 +166,7 @@ test('send (fw tool) uses matchResponse for non-ok state shape', async () => {
 
   setTimeout(() => {
     // No 'ok' field — matchResponse identifies it as a valid state response
-    transport.halfpipe._controlHandler({ type: 'state', busy: false });
+    transport._handleControl({ type: 'state', busy: false });
   }, 10);
 
   const result = await pending;
@@ -182,7 +182,7 @@ test('send (hid tool) sends CONTROL frame with HID target bits', async () => {
   const pending = transport.send({ type: 'mouse.click', button: 'left' }, hidTool, { timeoutMs: 200 });
 
   setTimeout(() => {
-    transport.halfpipe._controlHandler({ ok: true });
+    transport._handleControl({ ok: true });
   }, 10);
 
   const result = await pending;
