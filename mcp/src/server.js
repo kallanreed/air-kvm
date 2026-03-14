@@ -114,6 +114,15 @@ export function createServer({ transport, send }) {
       return;
     }
 
+    if (name === 'airkvm_transfer_reset') {
+      transport.halfpipe.reset().then(() => {
+        send({ jsonrpc: '2.0', id, result: makeToolResultText('BLE transfer state reset') });
+      }).catch((err) => {
+        send({ jsonrpc: '2.0', id, result: makeToolResultText(`reset failed: ${err.message}`), isError: true });
+      });
+      return;
+    }
+
     const command = tool.build(args);
     const timeoutMs = name === 'airkvm_dom_snapshot' ? 60000
       : (name === 'airkvm_screenshot_tab' || name === 'airkvm_screenshot_desktop') ? 30000
@@ -138,6 +147,7 @@ export function createServer({ transport, send }) {
         return;
       }
 
+      // TODO: Clunky AF
       // Local commands: return brief confirmation with any state payload.
       if (isLocal) {
         const detail = response?.type === 'state' || response?.type === 'fw.version'

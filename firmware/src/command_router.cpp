@@ -19,8 +19,8 @@ void CommandRouter::ProcessFwFrame(const AkFrame& frame) {
     transport_.EmitControl(R"({"ok":false,"error":"invalid_command"})");
     return;
   }
-  const bool ok = HandleFwCommand(*cmd);
-  transport_.EmitControl(ok ? R"({"ok":true})" : R"({"ok":false,"error":"command_rejected"})");
+  if (!HandleFwCommand(*cmd))
+    transport_.EmitControl(R"({"ok":false,"error":"invalid_command"})");
 }
 
 void CommandRouter::ProcessHidFrame(const AkFrame& frame) {
@@ -51,7 +51,7 @@ bool CommandRouter::HandleFwCommand(const airkvm::Command& cmd) {
           R"(","built_at":")" AIRKVM_FW_BUILT_AT R"("})");
       return true;
     default:
-      return true;
+      return false;
   }
 }
 

@@ -124,7 +124,8 @@ const TOOL_DEFINITIONS = [
       },
       required: ['busy']
     },
-    build: (args) => ({ type: 'state.set', busy: args.busy })
+    build: (args) => ({ type: 'state.set', busy: args.busy }),
+    matchResponse: (msg) => msg?.type === 'state' && typeof msg.busy === 'boolean'
   },
   {
     name: 'airkvm_fw_version_request',

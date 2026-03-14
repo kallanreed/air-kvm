@@ -191,17 +191,4 @@ itest('RESET frame clears parser state; firmware responds normally after', async
 // HalfPipe discards NACKs that arrive without a pending chunk. Verifying
 // this path requires a BLE receiver (extension) to be connected.
 
-// -- Firmware/protocol consistency -------------------------------------------
 
-// BUG: airkvm_transfer_reset sends {type:'transfer.reset'} to FW target, but
-// firmware's ParseCommandLine() has no handler for 'transfer.reset', so it
-// always returns invalid_command. Document current behavior here.
-// Note: we use a specific matchResponse to avoid matching stale ok:true responses
-// from previous tests that emit double CONTROL messages (e.g. fw.version.request).
-itest('transfer_reset returns invalid_command (firmware does not handle transfer.reset)', async () => {
-  const t = getTool('airkvm_transfer_reset');
-  const testTool = { ...t, matchResponse: (msg) => msg?.error === 'invalid_command' };
-  const result = await transport.send(t.build(), testTool);
-  assert.equal(result.ok, false);
-  assert.equal(result.msg.error, 'invalid_command');
-});
