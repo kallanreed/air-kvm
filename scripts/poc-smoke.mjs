@@ -83,7 +83,9 @@ function run() {
         arguments: { command: { type: 'state.request' } }
       });
       const ctlText = control?.result?.content?.[0]?.text || '';
-      if (!ctlText.includes('forwarded')) throw new Error(`control_failed:${ctlText}`);
+      let ctlData;
+      try { ctlData = JSON.parse(ctlText); } catch { throw new Error(`control_bad_json:${ctlText}`); }
+      if (ctlData?.error || ctlData?.type !== 'state') throw new Error(`control_failed:${ctlText}`);
 
       bootstrapped = true;
       if (timeoutId) clearTimeout(timeoutId);

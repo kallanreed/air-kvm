@@ -28,7 +28,8 @@ export class UartTransport {
     this.serialPort = new SerialPort({
       path: this.portPath,
       baudRate: this.baudRate,
-      autoOpen: false
+      autoOpen: false,
+      hupcl: false  // don't assert DTR on open — prevents unintentional ESP32 reset
     });
 
     await new Promise((resolve, reject) => {
