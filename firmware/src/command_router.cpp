@@ -7,46 +7,50 @@
 
 namespace airkvm::fw {
 
-CommandRouter::CommandRouter(TransportMux& transport, DeviceState& state, HidController& hid)
+CommandRouter::CommandRouter(Transport& transport, DeviceState& state, HidController& hid)
     : transport_(transport), state_(state), hid_(hid) {}
 
-void CommandRouter::ProcessFwFrame(const AkFrame& frame) {
+void CommandRouter::ProcessFwFrame(const AkFrame& frame, Route& route) {
   const std::string json(
       reinterpret_cast<const char*>(frame.payload),
       frame.payload_len);
   const auto cmd = airkvm::ParseCommandLine(json);
   if (!cmd.has_value()) {
-    transport_.EmitControl(R"({"ok":false,"error":"invalid_command"})");
+    route.Reply(R"({"ok":false,"error":"invalid_command"})");
     return;
   }
-  if (!HandleFwCommand(*cmd))
-    transport_.EmitControl(R"({"ok":false,"error":"invalid_command"})");
+  if (!HandleFwCommand(*cmd, route))
+    route.Reply(R"({"ok":false,"error":"invalid_command"})");
 }
 
-void CommandRouter::ProcessHidFrame(const AkFrame& frame) {
+void CommandRouter::ProcessHidFrame(const AkFrame& frame, Route& route) {
   const std::string json(
       reinterpret_cast<const char*>(frame.payload),
       frame.payload_len);
   const auto cmd = airkvm::ParseCommandLine(json);
   if (!cmd.has_value()) {
-    transport_.EmitControl(R"({"ok":false,"error":"invalid_command"})");
+    route.Reply(R"({"ok":false,"error":"invalid_command"})");
     return;
   }
   const bool ok = HandleHidCommand(*cmd);
-  transport_.EmitControl(ok ? R"({"ok":true})" : R"({"ok":false,"error":"command_rejected"})");
+  route.Reply(ok ? R"({"ok":true})" : R"({"ok":false,"error":"command_rejected"})");
 }
 
-bool CommandRouter::HandleFwCommand(const airkvm::Command& cmd) {
+bool CommandRouter::HandleFwCommand(const airkvm::Command& cmd, Route& route) {
   switch (cmd.type) {
     case airkvm::CommandType::StateRequest:
-      transport_.EmitState(state_);
+      route.Reply(state_.busy
+          ? R"({"type":"state","busy":true})"
+          : R"({"type":"state","busy":false})");
       return true;
     case airkvm::CommandType::StateSet:
       state_.busy = cmd.busy;
-      transport_.EmitState(state_);
+      route.Reply(state_.busy
+          ? R"({"type":"state","busy":true})"
+          : R"({"type":"state","busy":false})");
       return true;
     case airkvm::CommandType::FwVersionRequest:
-      transport_.EmitControl(
+      route.Reply(
           R"({"type":"fw.version","version":")" AIRKVM_FW_VERSION
           R"(","built_at":")" AIRKVM_FW_BUILT_AT R"("})");
       return true;

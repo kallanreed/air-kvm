@@ -5,7 +5,7 @@
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
 
-#include "transport_mux.hpp"
+#include "transport.hpp"
 
 namespace {
 // Delay between consecutive BLE HID notifications (ms).  Must exceed the
@@ -430,7 +430,7 @@ bool ResolveRawHidUsage(const String& key, uint8_t* modifier, uint8_t* keycode) 
 
 namespace airkvm::fw {
 
-void HidController::SetTelemetrySink(TransportMux* transport) {
+void HidController::SetTelemetrySink(Transport* transport) {
   telemetry_ = transport;
 }
 

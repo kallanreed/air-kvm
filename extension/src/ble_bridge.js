@@ -10,7 +10,6 @@ import {
   disconnectBle,
   getConnectedDeviceInfo,
   postBinary,
-  readBleTxSnapshot,
   setBleVerboseDebug,
   setBleDebugLogger
 } from './bridge.js';
@@ -27,7 +26,6 @@ import {
 } from './ble_bridge_ui.js';
 
 const kHandshakeTimeoutMs = 6000;
-const kHandshakeAttempts = 3;
 const kPreferredDeviceStorageKey = 'blePreferredDeviceId';
 const kPreferredDeviceNameStorageKey = 'blePreferredDeviceName';
 const kHealthPingIntervalMs = 6000;
@@ -45,7 +43,7 @@ let healthState = {
   lastActivityAt: 0
 };
 let lastCommandContext = null;
-let connectState = { pendingHandshake: null };
+let connectState = { pendingControl: null };
 
 const hp = new HalfPipe({
   writeFn: async (bytes) => { await postBinary(bytes); },
@@ -59,8 +57,9 @@ hp.onMessage((msg) => {
 
 hp.onControl((msg) => {
   noteControlFrameForHealth(msg);
-  if (connectState.pendingHandshake && (msg?.type === 'state' || msg?.type === 'boot' || typeof msg?.ok === 'boolean')) {
-    connectState.pendingHandshake();
+  const waiter = connectState.pendingControl;
+  if (waiter && waiter.predicate(msg)) {
+    waiter.resolve(true);
   }
 });
 
@@ -206,7 +205,7 @@ function startHealthWatchdog() {
     }
     const ackWait = waitForHealthAck();
     let posted = false;
-    try { await hp.send({ type: 'state.request' }, kTarget.MCP); posted = true; } catch { posted = false; }
+    try { await hp.sendControl({ type: 'state.request' }, kTarget.FW); posted = true; } catch { posted = false; }
     if (!posted) {
       healthState.misses += 1;
       debugLog('health ping send failed', { misses: healthState.misses });
@@ -307,16 +306,19 @@ async function clearPreferredDeviceId() {
   clearPreferredDeviceLocalFallback();
 }
 
-function waitForControlHandshake(state) {
+function waitForControl(predicate) {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
-      state.pendingHandshake = null;
+      connectState.pendingControl = null;
       resolve(false);
     }, kHandshakeTimeoutMs);
-    state.pendingHandshake = () => {
-      clearTimeout(timer);
-      state.pendingHandshake = null;
-      resolve(true);
+    connectState.pendingControl = {
+      predicate,
+      resolve: (ok) => {
+        clearTimeout(timer);
+        connectState.pendingControl = null;
+        resolve(ok);
+      }
     };
   });
 }
@@ -333,8 +335,7 @@ async function connectAndBind(options = {}) {
   infoLog('connect start', { trigger, allowChooserFallback });
   notifySw(trigger === 'auto' ? 'connect_auto_start' : 'connect_click');
   setStatus(trigger === 'auto' ? 'Auto-connecting...' : 'Connecting...');
-  connectState.pendingHandshake = null;
-  const state = connectState;
+  connectState.pendingControl = null;
   const preferred = await loadPreferredDevice();
   if (trigger === 'auto' && typeof globalThis.navigator?.bluetooth?.getDevices === 'function') {
     try {
@@ -376,24 +377,14 @@ async function connectAndBind(options = {}) {
     }
     infoLog('connect success');
     infoLog('connected device', getConnectedDeviceInfo());
-    let handshakeOk = false;
-    for (let attempt = 1; attempt <= kHandshakeAttempts; attempt += 1) {
-      const handshakePending = waitForControlHandshake(state);
-      try { await hp.send({ type: 'state.request' }, kTarget.MCP); } catch { /* ignore */ }
-      const okAttempt = await handshakePending;
-      if (okAttempt) {
-        handshakeOk = true;
-        break;
-      }
-      try {
-        const snapshot = await readBleTxSnapshot();
-        debugLog('handshake snapshot', { attempt, snapshot });
-      } catch (err) {
-        debugLog('handshake snapshot failed', { attempt, error: String(err?.message || err) });
-      }
-      infoLog('handshake attempt timed out', { attempt });
-    }
-    if (!handshakeOk) {
+    // Handshake: send state.request and wait for state response.
+    // Boot has already happened well before BLE connection — we just need to
+    // confirm the firmware is responsive and get current state.
+    connectState.pendingControl = null;
+    const statePending = waitForControl((msg) => msg?.type === 'state');
+    try { await hp.sendControl({ type: 'state.request' }, kTarget.FW); } catch { /* ignore */ }
+    const stateOk = await statePending;
+    if (!stateOk) {
       infoLog('connect invalid stream (no JSON control response)');
       disconnectBle();
       await clearPreferredDeviceId();
@@ -474,7 +465,6 @@ notifySw('bridge_loaded');
 infoLog('bridge_loaded');
 refreshAutoscrollButton();
 refreshVerboseButton();
-
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'desktop.capture.request' && msg.target === 'ble-page') {

@@ -1,4 +1,4 @@
-#include "transport_mux.hpp"
+#include "transport.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -12,7 +12,7 @@
 
 namespace airkvm::fw {
 
-void TransportMux::Begin() {
+void Transport::Begin() {
 #if defined(ESP32)
   if (tx_queue_ != nullptr) return;
   tx_queue_ = static_cast<void*>(xQueueCreate(32, sizeof(TxFrame)));
@@ -22,7 +22,7 @@ void TransportMux::Begin() {
     abort();
   }
   xTaskCreatePinnedToCore(
-      &TransportMux::TxTaskMain,
+      &Transport::TxTaskMain,
       "airkvm_tx",
       4096,
       this,
@@ -32,11 +32,11 @@ void TransportMux::Begin() {
 #endif
 }
 
-void TransportMux::SetBleTxCharacteristic(NimBLECharacteristic* characteristic) {
+void Transport::SetBleTxCharacteristic(NimBLECharacteristic* characteristic) {
   tx_char_ = characteristic;
 }
 
-void TransportMux::EmitControl(const char* payload) {
+void Transport::EmitControl(const char* payload) {
   if (payload == nullptr) return;
   const size_t text_len = std::strlen(payload);
   if (text_len == 0 || text_len > kAkMaxPayload) return;
@@ -51,7 +51,35 @@ void TransportMux::EmitControl(const char* payload) {
   EnqueueFrame(frame);
 }
 
-void TransportMux::EmitControlToBle(const char* payload) {
+void Transport::EmitLog(const String& message) {
+  if (message.length() == 0) return;
+  const auto text_len = static_cast<uint8_t>(
+      message.length() < kAkMaxPayload ? message.length() : kAkMaxPayload);
+  TxFrame frame{};
+  if (!AkEncodeFrame(
+          kAkFrameTypeLog, 0, 0,
+          reinterpret_cast<const uint8_t*>(message.c_str()),
+          text_len,
+          frame.binary, sizeof(frame.binary), &frame.binary_len)) {
+    return;
+  }
+  EnqueueFrame(frame);
+}
+
+void Transport::ForwardFrameToUart(const AkFrame& frame, bool priority) {
+  SendToUart(frame.raw, frame.raw_len, priority);
+}
+
+void Transport::SendToUart(const uint8_t* bytes, size_t len, bool priority) {
+  if (bytes == nullptr || len == 0 || len > kMaxBinaryFrameLen) return;
+  TxFrame tx{};
+  tx.priority   = priority;
+  tx.binary_len = len;
+  std::memcpy(tx.binary, bytes, len);
+  EnqueueFrame(tx);
+}
+
+void Transport::EmitControlToBle(const char* payload) {
   if (payload == nullptr || tx_char_ == nullptr) return;
   const size_t text_len = std::strlen(payload);
   if (text_len == 0 || text_len > kAkMaxPayload) return;
@@ -68,30 +96,7 @@ void TransportMux::EmitControlToBle(const char* payload) {
   tx_char_->notify();
 }
 
-void TransportMux::EmitLog(const String& message) {
-  if (message.length() == 0) return;
-  const auto text_len = static_cast<uint8_t>(
-      message.length() < kAkMaxPayload ? message.length() : kAkMaxPayload);
-  TxFrame frame{};
-  if (!AkEncodeFrame(
-          kAkFrameTypeLog, 0, 0,
-          reinterpret_cast<const uint8_t*>(message.c_str()),
-          text_len,
-          frame.binary, sizeof(frame.binary), &frame.binary_len)) {
-    return;
-  }
-  EnqueueFrame(frame);
-}
-
-void TransportMux::EmitState(const DeviceState& state) {
-  if (state.busy) {
-    EmitControl(R"({"type":"state","busy":true})");
-  } else {
-    EmitControl(R"({"type":"state","busy":false})");
-  }
-}
-
-bool TransportMux::ForwardFrameToBle(const AkFrame& frame) {
+bool Transport::ForwardFrameToBle(const AkFrame& frame) {
   if (tx_char_ == nullptr) {
     EmitLog(R"({"evt":"ble.forward.skip","reason":"no_characteristic"})");
     return false;
@@ -104,24 +109,18 @@ bool TransportMux::ForwardFrameToBle(const AkFrame& frame) {
   return true;
 }
 
-void TransportMux::ForwardFrameToUart(const AkFrame& frame, bool priority) {
-  SendToUart(frame.raw, frame.raw_len, priority);
-}
-
-void TransportMux::SendToUart(const uint8_t* bytes, size_t len, bool priority) {
-  if (bytes == nullptr || len == 0 || len > kMaxBinaryFrameLen) return;
-  TxFrame tx{};
-  tx.priority   = priority;
-  tx.binary_len = len;
-  std::memcpy(tx.binary, bytes, len);
-  EnqueueFrame(tx);
+bool Transport::SendRawToBle(const uint8_t* bytes, size_t len) {
+  if (tx_char_ == nullptr || bytes == nullptr || len == 0 || len > kMaxBleNotifyBytes) return false;
+  tx_char_->setValue(bytes, len);
+  tx_char_->notify();
+  return true;
 }
 
 // ---------------------------------------------------------------------------
 // Internal
 // ---------------------------------------------------------------------------
 
-void TransportMux::EnqueueFrame(const TxFrame& frame) {
+void Transport::EnqueueFrame(const TxFrame& frame) {
 #if defined(ESP32)
   if (tx_queue_ == nullptr) return;
   const auto queue = reinterpret_cast<QueueHandle_t>(tx_queue_);
@@ -135,7 +134,7 @@ void TransportMux::EnqueueFrame(const TxFrame& frame) {
 #endif
 }
 
-void TransportMux::EmitFrameDirect(const TxFrame& frame) {
+void Transport::EmitFrameDirect(const TxFrame& frame) {
   if (frame.binary_len > 0) {
     Serial.write(frame.binary, frame.binary_len);
     Serial.flush();
@@ -143,16 +142,16 @@ void TransportMux::EmitFrameDirect(const TxFrame& frame) {
 }
 
 #if defined(ESP32)
-void TransportMux::TxTaskMain(void* arg) {
-  auto* mux = static_cast<TransportMux*>(arg);
-  if (mux == nullptr) {
+void Transport::TxTaskMain(void* arg) {
+  auto* self = static_cast<Transport*>(arg);
+  if (self == nullptr) {
     vTaskDelete(nullptr);
     return;
   }
-  mux->TxTaskLoop();
+  self->TxTaskLoop();
 }
 
-void TransportMux::TxTaskLoop() {
+void Transport::TxTaskLoop() {
   if (tx_queue_ == nullptr) {
     vTaskDelete(nullptr);
     return;

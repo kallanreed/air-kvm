@@ -60,37 +60,37 @@ These are hard constraints. Violating them introduces subtle bugs that are diffi
 
 **ALL messages to firmware — from either the extension or MCP — MUST go through HalfPipe.**
 
-No exceptions. No raw JSON. No direct BLE writes. No CONTROL frames from extension.
+No exceptions. No raw JSON. No direct BLE writes.
 
 ### How HalfPipe works
 
-- Caller: `halfpipe.send(obj)` / `halfpipe.onMessage(cb)` / `halfpipe.onControl(cb)`
-- HalfPipe serializes `obj` to JSON, splits into ≤255-byte chunks, wraps each as an AK CHUNK frame (`0x01`), sends one at a time, waits for ACK before next chunk.
+- Caller: `halfpipe.send(obj)` / `halfpipe.sendControl(obj, target)` / `halfpipe.onMessage(cb)` / `halfpipe.onControl(cb)`
+- `halfpipe.send(obj)` serializes `obj` to JSON, splits into ≤255-byte chunks, wraps each as an AK CHUNK frame (`0x01`), sends one at a time, waits for ACK before next chunk.
+- `halfpipe.sendControl(obj, target)` sends a single CONTROL frame (`0x02`) — no chunking, no ACK wait. Payload must fit in ≤255 bytes.
 - Firmware is a **dumb bridge**: forwards CHUNK/ACK/NACK/RESET between UART↔BLE unchanged. It never parses CHUNK payloads.
-- MCP HalfPipe: `writeFn` → `encodeChunkFrame` → UART write.
-- Extension HalfPipe (service_worker.js `getHalfPipe()`): `writeFn` → `postBinaryOrThrow` → `postBinaryViaBridge` → `ble.postBinary` → bridge page → `postBinary` → BLE write.
+- MCP HalfPipe: `writeFn` → `encodeFrame` → UART write.
+- Extension HalfPipe (`ble_bridge.js` `hp`): `writeFn` → `postBinary` → BLE write.
 
 ### Extension → Firmware (BLE)
 
-- **Use `getHalfPipe().send(msg)` in service_worker.js.** That is the only correct send path.
-- `ble_bridge.js` cannot call HalfPipe directly (different context). It must send `{ type: 'halfpipe.send', payload }` to the service worker, which calls `getHalfPipe().send(payload)`.
-- **Never call `postEvent` / `ble.post` to send anything to firmware.** `postEvent` writes raw JSON text to BLE. Firmware's BLE RX parser expects AK frames and silently drops raw JSON.
-- **Never send CONTROL frames from extension to firmware.** `OnBleFrame()` in firmware explicitly drops CONTROL frames received over BLE.
+- **Use `hp.send(msg)` in `ble_bridge.js`** for browser-automation messages (dom snapshot, screenshot, etc.). These are CHUNK frames; firmware forwards them to UART; MCP's HalfPipe reassembles.
+- **Use `hp.sendControl(msg, target)` in `ble_bridge.js`** for firmware-local commands (`state.request`, `state.set`, `fw.version.request`). These arrive as CONTROL frames; firmware handles them locally without forwarding.
+- Firmware **does not reassemble CHUNKs** received over BLE (insufficient RAM). Firmware-local commands must arrive as CONTROL frames.
+- **Never write raw JSON to BLE.** Firmware's BLE RX parser expects AK frames and silently drops raw JSON.
 
 ### Firmware → Extension (BLE)
 
 - Firmware sends CONTROL frames (`0x02`) for boot message and state responses via BLE TX notify.
-- Extension path: BLE notify → `ble_bridge.js` → `ble.command { type: '__ble_raw_bytes' }` → service worker `handleBleRawBytes` → `hp.onFrame()` → `halfpipe.onControl(cb)` or `halfpipe.onMessage(cb)`.
-- Service worker forwards CONTROL frames from firmware back to `ble_bridge.js` via `chrome.runtime.sendMessage({ type: 'ble.control', command: msg })` so the bridge page can handle handshake/health resolution.
+- Extension path: BLE notify → `ble_bridge.js` `onCommand` callback → `hp.feedBytes()` → `halfpipe.onControl(cb)` or `halfpipe.onMessage(cb)`.
 
 ### MCP → Firmware (UART)
 
-- **HID / firmware-local commands** (`airkvm_send` tool): encoded as CONTROL frames (`0x02`) via `sendControlCommand`. This is the **only** place CONTROL frames are sent — from MCP to firmware over UART only.
+- **HID / firmware-local commands** (`airkvm_send` tool): encoded as CONTROL frames (`0x02`) via `sendControlCommand`.
 - **All other tools** (browser automation): sent via `halfpipe.send()` as CHUNK frames. Firmware forwards them to BLE. Extension HalfPipe reassembles.
 
-### What the firmware handles locally (CONTROL frames on UART only)
+### What the firmware handles locally (CONTROL frames, any transport)
 
-`mouse.move_rel`, `mouse.move_abs`, `mouse.click`, `key.tap`, `key.type`, `state.request`, `state.set`, `fw.version.request`. Everything else is forwarded to BLE as-is.
+`mouse.move_rel`, `mouse.move_abs`, `mouse.click`, `key.tap`, `key.type`, `state.request`, `state.set`, `fw.version.request`. Everything else is forwarded to the other transport segment as-is.
 
 ### Full reference
 

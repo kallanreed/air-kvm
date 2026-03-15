@@ -11,7 +11,8 @@
 #include "command_router.hpp"
 #include "device_state.hpp"
 #include "hid_controller.hpp"
-#include "transport_mux.hpp"
+#include "route.hpp"
+#include "transport.hpp"
 
 namespace airkvm::fw {
 
@@ -35,9 +36,6 @@ class AirKvmApp {
   class TxCallbacks : public NimBLECharacteristicCallbacks {
    public:
     explicit TxCallbacks(AirKvmApp& app);
-    void onSubscribe(NimBLECharacteristic* characteristic,
-                     ble_gap_conn_desc* desc,
-                     uint16_t sub_value) override;
    private:
     AirKvmApp& app_;
   };
@@ -63,12 +61,11 @@ class AirKvmApp {
 
   void OnBleWrite(const std::string& value);
   void ProcessBleWrite(const std::string& value);
-  void OnBleSubscribed();
   void OnUartFrame(const AkFrame& frame);
   void OnBleFrame(const AkFrame& frame);
+  void DispatchFrame(const AkFrame& frame, Route& route);
   void OnBleConnected(NimBLEServer* server);
   void OnBleDisconnected(NimBLEServer* server);
-  void SendNack(const AkFrame& frame);
   bool DrainUartBytes();
 #if defined(ESP32)
   void DrainBleRxQueue();
@@ -77,8 +74,10 @@ class AirKvmApp {
 
   DeviceState     state_;
   HidController   hid_;
-  TransportMux    transport_;
+  Transport    transport_;
   CommandRouter   router_;
+  UartRoute       uart_route_;
+  BleRoute        ble_route_;
   AkFrameParser   uart_parser_;
   AkFrameParser   ble_parser_;
   TxCallbacks     tx_callbacks_;

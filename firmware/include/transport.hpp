@@ -4,16 +4,17 @@
 #include <cstddef>
 
 #include "ak_frame_parser.hpp"
-#include "device_state.hpp"
 
 class NimBLECharacteristic;
 
 namespace airkvm::fw {
 
-class TransportMux {
+class Transport {
  public:
   void Begin();
   void SetBleTxCharacteristic(NimBLECharacteristic* characteristic);
+
+  // --- UART ---
 
   // Emit a firmware-generated CONTROL frame to UART.
   void EmitControl(const char* payload);
@@ -21,21 +22,25 @@ class TransportMux {
   // Emit a firmware-generated LOG frame to UART.
   void EmitLog(const String& message);
 
-  // Emit a state CONTROL frame to UART.
-  void EmitState(const DeviceState& state);
-
-  // Emit a firmware-generated CONTROL frame directly to BLE (bypasses UART queue).
-  // Safe to call from the NimBLE subscription callback after the client subscribes.
-  void EmitControlToBle(const char* payload);
-  // to notify; the caller is responsible for sending a NACK.
-  bool ForwardFrameToBle(const AkFrame& frame);
-
   // Forward an AK frame to UART. priority=true uses xQueueSendToFront
   // so RESET frames jump ahead of any queued data.
   void ForwardFrameToUart(const AkFrame& frame, bool priority = false);
 
   // Send pre-encoded bytes to UART.
   void SendToUart(const uint8_t* bytes, size_t len, bool priority = false);
+
+  // --- BLE ---
+
+  // Emit a firmware-generated CONTROL frame directly to BLE.
+  void EmitControlToBle(const char* payload);
+
+  // Forward an AK frame to BLE. Returns false if no characteristic is set
+  // or the frame is too large for a BLE notify.
+  bool ForwardFrameToBle(const AkFrame& frame);
+
+  // Send pre-encoded bytes directly to BLE (e.g. a NACK frame).
+  // Returns false if no characteristic is set or the payload is too large.
+  bool SendRawToBle(const uint8_t* bytes, size_t len);
 
  private:
   static constexpr size_t kMaxBinaryFrameLen = kAkMaxFrameLen;  // 267 bytes
@@ -50,6 +55,9 @@ class TransportMux {
   void EnqueueFrame(const TxFrame& frame);
   void EmitFrameDirect(const TxFrame& frame);
 
+  // ESP32 guard: the native test environment doesn't have FreeRTOS, so the
+  // TX queue and task are compiled out. EnqueueFrame falls back to
+  // EmitFrameDirect (synchronous serial write) in that case.
 #if defined(ESP32)
   static void TxTaskMain(void* arg);
   void TxTaskLoop();
@@ -61,4 +69,3 @@ class TransportMux {
 };
 
 }  // namespace airkvm::fw
-

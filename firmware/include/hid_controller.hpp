@@ -9,14 +9,14 @@ class NimBLEServer;
 
 namespace airkvm::fw {
 
-class TransportMux;
+class Transport;
 
 class HidController {
  public:
   HidController() = default;
 
   void Setup(NimBLEServer* server, NimBLEAdvertising* advertising);
-  void SetTelemetrySink(TransportMux* transport);
+  void SetTelemetrySink(Transport* transport);
   String HidServiceUuid() const;
 
   bool SendMouseMoveRel(int dx, int dy);
@@ -38,7 +38,7 @@ class HidController {
   NimBLECharacteristic* keyboard_input_{nullptr};
   NimBLECharacteristic* mouse_input_{nullptr};
   String hid_service_uuid_{};
-  TransportMux* telemetry_{nullptr};
+  Transport* telemetry_{nullptr};
 };
 
 }  // namespace airkvm::fw

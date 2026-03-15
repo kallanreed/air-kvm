@@ -34,7 +34,10 @@ AirKvmApp& AirKvmApp::Instance() {
 }
 
 AirKvmApp::AirKvmApp()
-    : router_(transport_, state_, hid_), tx_callbacks_(*this), rx_callbacks_(*this), server_callbacks_(*this) {
+    : router_(transport_, state_, hid_),
+      uart_route_(transport_),
+      ble_route_(transport_),
+      tx_callbacks_(*this), rx_callbacks_(*this), server_callbacks_(*this) {
   hid_.SetTelemetrySink(&transport_);
 }
 
@@ -112,55 +115,13 @@ bool AirKvmApp::DrainUartBytes() {
   return true;
 }
 
-void AirKvmApp::SendNack(const AkFrame& frame) {
-  uint8_t nack[kAkMaxFrameLen];
-  size_t nack_len = 0;
-  const uint8_t type_byte = ((kAkTargetMcp & 0x7u) << 5) | kAkFrameTypeNack;
-  if (AkEncodeFrame(type_byte, frame.transfer_id, frame.seq,
-                    nullptr, 0, nack, sizeof(nack), &nack_len)) {
-    transport_.SendToUart(nack, nack_len);
-  }
-}
-
 void AirKvmApp::OnUartFrame(const AkFrame& frame) {
   if (frame.type == kAkFrameTypeReset) {
     uart_parser_.Reset();
     transport_.ForwardFrameToBle(frame);
     return;
   }
-
-  switch (frame.target) {
-    case kAkTargetFw:
-      if (frame.type != kAkFrameTypeControl) {
-        SendNack(frame);
-        transport_.EmitLog(R"({"evt":"fw.nack","reason":"expected_control"})");
-        return;
-      }
-      router_.ProcessFwFrame(frame);
-      return;
-
-    case kAkTargetHid:
-      if (frame.type != kAkFrameTypeControl) {
-        SendNack(frame);
-        transport_.EmitLog(R"({"evt":"hid.nack","reason":"expected_control"})");
-        return;
-      }
-      router_.ProcessHidFrame(frame);
-      return;
-
-    case kAkTargetExtension:
-      if (!transport_.ForwardFrameToBle(frame)) {
-        SendNack(frame);
-        transport_.EmitLog(R"({"evt":"ble.forward.nack","reason":"frame_too_large"})");
-      }
-      return;
-
-    case kAkTargetMcp:
-    default:
-      SendNack(frame);
-      transport_.EmitLog(R"({"evt":"uart.nack","reason":"invalid_target"})");
-      return;
-  }
+  DispatchFrame(frame, uart_route_);
 }
 
 void AirKvmApp::OnBleFrame(const AkFrame& frame) {
@@ -169,12 +130,42 @@ void AirKvmApp::OnBleFrame(const AkFrame& frame) {
     transport_.ForwardFrameToUart(frame, /*priority=*/true);
     return;
   }
-  // CHUNK, ACK, NACK → forward to MCP.
-  // CONTROL and LOG from the extension are not expected; drop silently.
-  if (frame.type == kAkFrameTypeChunk ||
-      frame.type == kAkFrameTypeAck   ||
-      frame.type == kAkFrameTypeNack) {
-    transport_.ForwardFrameToUart(frame);
+  DispatchFrame(frame, ble_route_);
+}
+
+void AirKvmApp::DispatchFrame(const AkFrame& frame, Route& route) {
+  switch (frame.target) {
+    case kAkTargetFw:
+      if (frame.type != kAkFrameTypeControl) {
+        route.Nack(frame);
+        transport_.EmitLog(R"({"evt":"fw.nack","reason":"expected_control"})");
+        return;
+      }
+      router_.ProcessFwFrame(frame, route);
+      return;
+
+    case kAkTargetHid:
+      if (frame.type != kAkFrameTypeControl) {
+        route.Nack(frame);
+        transport_.EmitLog(R"({"evt":"hid.nack","reason":"expected_control"})");
+        return;
+      }
+      router_.ProcessHidFrame(frame, route);
+      return;
+
+    default:
+      // Forward to the opposite transport if the target matches this route's
+      // RouteTarget (Extension for UART, MCP for BLE). Anything else is invalid.
+      if (frame.target == route.RouteTarget()) {
+        if (!route.Forward(frame)) {
+          route.Nack(frame);
+          transport_.EmitLog(R"({"evt":"forward.nack","reason":"frame_too_large"})");
+        }
+      } else {
+        route.Nack(frame);
+        transport_.EmitLog(R"({"evt":"nack","reason":"invalid_target"})");
+      }
+      return;
   }
 }
 
@@ -215,20 +206,6 @@ void AirKvmApp::DrainBleRxQueue() {
 #endif
 
 AirKvmApp::TxCallbacks::TxCallbacks(AirKvmApp& app) : app_(app) {}
-
-void AirKvmApp::TxCallbacks::onSubscribe(NimBLECharacteristic* /*characteristic*/,
-                                          ble_gap_conn_desc* /*desc*/,
-                                          uint16_t sub_value) {
-  // sub_value 1 = notifications enabled; send boot frame so the extension
-  // can resolve its handshake without requiring MCP to be running.
-  if (sub_value == 1) {
-    app_.OnBleSubscribed();
-  }
-}
-
-void AirKvmApp::OnBleSubscribed() {
-  transport_.EmitControlToBle(kBootMsg);
-}
 
 AirKvmApp::RxCallbacks::RxCallbacks(AirKvmApp& app) : app_(app) {}
 

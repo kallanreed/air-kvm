@@ -9,14 +9,15 @@ over two transport segments bridged by the firmware:
 2. **Extension ↔ Firmware** over BLE UART-style GATT (wireless)
 
 **The only send path is HalfPipe.** No code writes raw frames to hardware directly.
-MCP and the extension each hold a `HalfPipe` instance; firmware is a dumb bridge that
-forwards frames between UART and BLE unchanged.
+MCP and the extension each hold a `HalfPipe` instance.
 
 Every frame carries a **routing target** in the upper 3 bits of the type byte (see §6.1).
 Firmware uses this to decide whether to handle the frame locally or forward it.
 
 - **`target=FW` or `target=HID` + CONTROL frame** → firmware handles locally
   (`state.request`, `fw.version.request`, mouse/keyboard commands, etc.)
+- **CHUNK frames** → forwarded to the other transport segment unchanged
+  (firmware does not reassemble CHUNKs — insufficient RAM; CHUNK payloads are opaque to firmware)
 - **Everything else** → forwarded to the other transport segment unchanged
 
 ## 2) BLE GATT Profile
