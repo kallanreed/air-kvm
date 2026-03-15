@@ -1,7 +1,10 @@
 // Content script: injected into every browser tab. Tracks and reports busy state
 // (DOM mutation activity) to the service worker, which translates it into a
 // firmware state.set command so the controller knows when the page is settling.
-import { busyEvent } from './messages.js';
+
+function busyEvent(busy) {
+  return { type: 'busy.changed', ts: Date.now(), busy: Boolean(busy) };
+}
 
 let busy = false;
 let pendingTimer = null;

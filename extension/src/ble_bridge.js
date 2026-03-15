@@ -52,11 +52,13 @@ const hp = new HalfPipe({
 });
 
 hp.onMessage((msg) => {
+  commandLog('BLE->SW', msg);
   markBridgeActivity('hp_message');
   chrome.runtime.sendMessage({ type: 'hp.message', msg }).catch(() => {});
 });
 
 hp.onControl((msg) => {
+  commandLog('BLE->SW', msg);
   noteControlFrameForHealth(msg);
   const waiter = connectState.pendingControl;
   if (waiter && waiter.predicate(msg)) {
@@ -88,11 +90,26 @@ function summarizeCommand(frame) {
 function isVerboseOnlyCommand(frame) {
   if (!frame || typeof frame !== 'object') return true;
   if (typeof frame.type === 'string') {
-    return frame.type === 'transfer.ack';
+    // Health-ping round-trip and low-level transport noise
+    return frame.type === 'transfer.ack'
+      || frame.type === 'state.request'
+      || frame.type === 'state';
   }
   // Plain transport ACK frame like {"ok":true}
   if (typeof frame.ok === 'boolean') return true;
   return false;
+}
+
+function briefSummary(frame) {
+  if (!frame || typeof frame !== 'object') return { type: 'unknown' };
+  const out = {};
+  if (typeof frame.type === 'string') out.type = frame.type;
+  else if (typeof frame.ok === 'boolean') out.type = 'ack';
+  if (typeof frame.request_id === 'string') out.request_id = frame.request_id;
+  if (typeof frame.tab_id === 'number') out.tab_id = frame.tab_id;
+  if (typeof frame.source === 'string') out.source = frame.source;
+  if (typeof frame.error === 'string') out.error = frame.error;
+  return out;
 }
 
 function commandLog(direction, frame) {
@@ -103,9 +120,8 @@ function commandLog(direction, frame) {
     transfer_id: typeof frame?.transfer_id === 'string' ? frame.transfer_id : null,
     ts: Date.now()
   };
-  if (!isVerboseLoggingEnabled() && direction === 'SW->BLE') return;
   if (!isVerboseLoggingEnabled() && isVerboseOnlyCommand(frame)) return;
-  infoLog(`[cmd] ${direction}`, summarizeCommand(frame));
+  infoLog(`[cmd] ${direction}`, isVerboseLoggingEnabled() ? frame : briefSummary(frame));
 }
 
 setBleDebugLogger((...args) => {
@@ -129,7 +145,7 @@ async function markDisconnected(reason) {
   if (disconnectInFlight) return;
   disconnectInFlight = true;
   const connectedInfo = getConnectedDeviceInfo();
-  infoLog('[telemetry]', {
+  debugLog('[telemetry]', {
     evt: 'ble.disconnect.snapshot',
     reason: reason || null,
     gatt_connected: Boolean(connectedInfo.connected),
@@ -341,7 +357,7 @@ async function connectAndBind(options = {}) {
   if (trigger === 'auto' && typeof globalThis.navigator?.bluetooth?.getDevices === 'function') {
     try {
       const known = await globalThis.navigator.bluetooth.getDevices();
-      infoLog('auto-connect known devices', known.map((d) => ({ id: d?.id || null, name: d?.name || null })));
+      debugLog('auto-connect known devices', known.map((d) => ({ id: d?.id || null, name: d?.name || null })));
     } catch (err) {
       infoLog('auto-connect known devices error', String(err?.message || err));
     }
@@ -377,7 +393,7 @@ async function connectAndBind(options = {}) {
       return;
     }
     infoLog('connect success');
-    infoLog('connected device', getConnectedDeviceInfo());
+    debugLog('connected device', getConnectedDeviceInfo());
     // Handshake: send state.request and wait for state response.
     // Boot has already happened well before BLE connection — we just need to
     // confirm the firmware is responsive and get current state.
@@ -394,7 +410,7 @@ async function connectAndBind(options = {}) {
       return;
     }
     const info = getConnectedDeviceInfo();
-    infoLog('connected device info', info);
+    debugLog('connected device info', info);
     await savePreferredDevice(info.id, info.name);
     notifySw('connect_success');
     setStatus('Connected');
@@ -483,7 +499,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     // tool calls don't trigger false-positive disconnects.
     healthState.suspendedUntil = Math.max(healthState.suspendedUntil, Date.now() + kHealthPingIntervalMs * 2);
     hp.send(msg.payload, kTarget.MCP)
-      .then(() => { markBridgeActivity('hp_send_complete'); sendResponse({ ok: true }); })
+      .then(() => { commandLog('SW->BLE', msg.payload); markBridgeActivity('hp_send_complete'); sendResponse({ ok: true }); })
       .catch((err) => sendResponse({ ok: false, error: String(err?.message || err) }));
     return true;
   }

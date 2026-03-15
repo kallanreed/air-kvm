@@ -269,7 +269,13 @@ function buildJsExecExpression(script, maxResultChars) {
     return (async () => {
       let compiled = null;
       try {
-        compiled = new Function(__airkvm_script);
+        // Try expression mode first so bare expressions return their value.
+        // Falls back to statement mode for multi-statement scripts with explicit return.
+        try {
+          compiled = new Function('return (' + __airkvm_script + ')');
+        } catch {
+          compiled = new Function(__airkvm_script);
+        }
       } catch (err) {
         return {
           ok: false,
@@ -417,8 +423,11 @@ async function executeScriptViaCdp(tabId, script, maxResultChars) {
       ...(Number.isInteger(contextId) ? { contextId } : {})
     });
     if (evalResult?.exceptionDetails) {
+      const ex = evalResult.exceptionDetails;
       const detail = String(
-        evalResult.exceptionDetails?.text
+        ex?.exception?.description
+          || ex?.exception?.value
+          || ex?.text
           || evalResult.result?.description
           || 'cdp_runtime_evaluate_failed'
       );
