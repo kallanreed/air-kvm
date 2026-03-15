@@ -30,7 +30,8 @@ function makeHarness() {
     windowId: 1,
     active: Boolean(active),
     title: 'New Tab',
-    url
+    url,
+    status: 'complete'
   });
   let blePostBinaryOk = true;
   let cdpWindowMethodMissing = false;
@@ -118,6 +119,7 @@ function makeHarness() {
         return 'data:image/png;base64,QUJDRA==';
       },
       sendMessage: async () => ({ type: 'dom.summary', title: 'Example Title', actionable: [] }),
+      onUpdated: { addListener: () => {}, removeListener: () => {} },
       create: async (opts) => {
         createTabCalls.push(opts);
         return createTabImpl(opts);

@@ -52,6 +52,7 @@ const hp = new HalfPipe({
 });
 
 hp.onMessage((msg) => {
+  markBridgeActivity('hp_message');
   chrome.runtime.sendMessage({ type: 'hp.message', msg }).catch(() => {});
 });
 
@@ -478,8 +479,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (!msg || msg.target !== 'ble-page') return;
   if (msg?.type === 'hp.send' && msg.target === 'ble-page') {
+    // Suspend health watchdog for the duration of this send so back-to-back
+    // tool calls don't trigger false-positive disconnects.
+    healthState.suspendedUntil = Math.max(healthState.suspendedUntil, Date.now() + kHealthPingIntervalMs * 2);
     hp.send(msg.payload, kTarget.MCP)
-      .then(() => sendResponse({ ok: true }))
+      .then(() => { markBridgeActivity('hp_send_complete'); sendResponse({ ok: true }); })
       .catch((err) => sendResponse({ ok: false, error: String(err?.message || err) }));
     return true;
   }

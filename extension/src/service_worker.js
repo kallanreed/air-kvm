@@ -827,15 +827,29 @@ async function sendOpenTab(command) {
   }
 
   const tab = await chrome.tabs.create({ url, active });
+  const tabId = tab?.id;
+
+  // Wait for the tab to finish loading before responding.
+  const loadedTab = await new Promise((resolve) => {
+    if (tab?.status === 'complete') { resolve(tab); return; }
+    function onUpdated(id, info, updatedTab) {
+      if (id === tabId && info.status === 'complete') {
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        resolve(updatedTab);
+      }
+    }
+    chrome.tabs.onUpdated.addListener(onUpdated);
+  });
+
   const normalizedTab = {
-    id: tab?.id ?? null,
-    window_id: tab?.windowId ?? null,
-    active: Boolean(tab?.active),
-    title: tab?.title || '',
-    url: tab?.url || url
+    id: loadedTab?.id ?? null,
+    window_id: loadedTab?.windowId ?? null,
+    active: Boolean(loadedTab?.active),
+    title: loadedTab?.title || '',
+    url: loadedTab?.url || url
   };
-  if (isAutomationCandidateTab(tab) && Number.isInteger(tab?.id)) {
-    lastAutomationTabId = tab.id;
+  if (isAutomationCandidateTab(loadedTab) && Number.isInteger(loadedTab?.id)) {
+    lastAutomationTabId = loadedTab.id;
   }
   await sendViaHalfPipe({
     type: 'tab.open',

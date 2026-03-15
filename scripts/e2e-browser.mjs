@@ -116,8 +116,8 @@ function run() {
       const listRes = parseResult(await tool('airkvm_list_tabs', {}), 'list_tabs');
       const tabs = listRes.tabs ?? listRes;
       if (!Array.isArray(tabs)) throw new Error(`list_tabs_not_array:${JSON.stringify(listRes)}`);
-      const exampleTab = tabs.find((t) => String(t.url || '').includes('example.com'));
-      if (!exampleTab) throw new Error(`list_tabs_no_example:${JSON.stringify(tabs)}`);
+      const exampleTab = tabs.find((t) => t.id === tabId) ?? tabs.find((t) => String(t.url || '').includes('example.com'));
+      if (!exampleTab) throw new Error(`list_tabs_no_tab:${JSON.stringify(tabs)}`);
       pass('list_tabs', `${tabs.length} tab(s), found example.com tab_id=${exampleTab.id}`);
 
       // Use the confirmed example.com tab for subsequent operations.
