@@ -48,6 +48,13 @@
 - `ble_bridge.html` + `ble_bridge.js`: BLE runtime context (Web Bluetooth).
 - `bridge.js`: BLE transport helper with `bleWrite()` for write-with-fallback and telemetry.
 
+Critical routing rule:
+- `HalfPipe` is the only extension transport, but there are two valid modes.
+- MCP-bound browser automation traffic must use `hp.send(...)` so it travels as CHUNK frames through firmware to MCP.
+- Firmware-local commands must use `hp.sendControl(..., kTarget.FW)` so they arrive as CONTROL frames and stop at firmware.
+- Do not send firmware-local commands through the MCP-bound `hp.send(...)` path just because they are “using HalfPipe”.
+- Known pitfall: `busy.changed` should become firmware `state.set` over `hp.sendControl(..., kTarget.FW)`, not `hp.send(...)`.
+
 ## Half-Pipe Transport Layer
 
 Two independent half-pipes with firmware bridging between them:
@@ -71,6 +78,13 @@ MCP app code                                    Extension app code
 - App code never thinks about chunking or payload size.
 - One chunk in flight at a time. Firmware backpressure is the flow control.
 - 3 binary control frame types: ack (`0x04`), nack (`0x05`), reset (`0x06`). No JSON in stream protocol.
+
+Critical invariant:
+- HalfPipe is the only valid transport because it is the component that emits AK frames.
+- AK frames carry the routing semantics on the wire: frame type and target.
+- That means message routing is not a separate convention layered above HalfPipe; it is encoded by the AK frame that HalfPipe sends.
+- Do not add alternate messaging paths. That would bypass AK frame type/target semantics and create a parallel protocol outside the existing wire format.
+- When routing is wrong, the fix is to keep using HalfPipe and choose the correct AK frame type/target.
 
 ## Extension Internal Architecture
 
@@ -109,6 +123,8 @@ flowchart TD
 - **Inbound (FW → Extension):** BLE notify → `bridge.js` `onCommand` → `hp.feedBytes()` (local) → HalfPipe reassembles → `onMessage` → `{ type:'hp.message' }` to service worker → dispatch.
 - **Outbound (Extension → FW):** handler calls `sendViaHalfPipe(result)` → `{ type:'hp.send' }` message → bridge page → `hp.send()` → `writeFn` → `postBinary()` → BLE write (all local in bridge page).
 - **CONTROL frames** (boot/state from firmware) are handled entirely in the bridge page by `onControl` — health tracking and handshake resolution happen without any service worker round-trip.
+- **Outbound (Extension firmware-local):** bridge page must call `hp.sendControl(..., kTarget.FW)` for firmware-local commands such as `state.set`, `state.request`, and `fw.version.request`. These must not be forwarded to MCP as normal `hp.send()` messages.
+- The important distinction here is wire-level: the correct AK frame type/target must be emitted for the command. This is why “still using HalfPipe” is not enough if the wrong HalfPipe path chooses the wrong AK routing semantics.
 
 ## Data Paths
 

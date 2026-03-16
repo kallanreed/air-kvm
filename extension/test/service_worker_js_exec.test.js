@@ -5,15 +5,21 @@ const kTrustedSender = {
   id: 'test',
   url: 'chrome-extension://test/ble_bridge.html'
 };
+const kCalibrationSender = {
+  id: 'test',
+  url: 'chrome-extension://test/calibration.html?session_id=sess-1'
+};
 
 function makeHarness() {
   const postedPayloads = [];
+  const postedControlPayloads = [];
   const postedBinary = [];
   const runtimeListeners = [];
   const cdpCommandCalls = [];
   const cdpAttachCalls = [];
   const cdpDetachCalls = [];
   const createTabCalls = [];
+  const createWindowCalls = [];
   const tabCaptureCalls = [];
   const desktopCaptureCalls = [];
   let jsExecEvalImpl = async () => ({ ok: true, value_type: 'number', value_json: '1', truncated: false });
@@ -88,6 +94,13 @@ function makeHarness() {
           postedPayloads.push(msg.payload);
           return { ok: blePostBinaryOk };
         }
+        if (msg?.type === 'hp.sendControl') {
+          postedControlPayloads.push({
+            payload: msg.payload,
+            control_target: msg.control_target
+          });
+          return { ok: blePostBinaryOk };
+        }
         if (msg?.type === 'ble.postBinary') {
           // No longer used by service_worker; kept for completeness.
           postedBinary.push(msg.bytes);
@@ -126,7 +139,27 @@ function makeHarness() {
       }
     },
     windows: {
-      get: async (windowId) => getWindowImpl(windowId)
+      get: async (windowId) => getWindowImpl(windowId),
+      create: async (opts) => {
+        createWindowCalls.push(opts);
+        return {
+          id: 31,
+          focused: opts.focused ?? true,
+          type: opts.type || 'normal',
+          left: 140,
+          top: 90,
+          width: opts.width ?? 900,
+          height: opts.height ?? 700,
+          state: 'normal',
+          tabs: [{
+            id: 52,
+            windowId: 31,
+            active: true,
+            title: 'Window Tab',
+            url: Array.isArray(opts.url) ? opts.url[0] : opts.url
+          }]
+        };
+      }
     },
     debugger: {
       attach: (_target, _version, cb) => {
@@ -209,12 +242,14 @@ function makeHarness() {
 
   return {
     postedPayloads,
+    postedControlPayloads,
     postedBinary,
     runtimeListeners,
     cdpCommandCalls,
     cdpAttachCalls,
     cdpDetachCalls,
     createTabCalls,
+    createWindowCalls,
     tabCaptureCalls,
     desktopCaptureCalls,
     setJsExecEvalImpl: (impl) => {
@@ -277,6 +312,18 @@ function findBleCommandListener(runtimeListeners, harness = null) {
   const listener = runtimeListeners.find((candidate) => {
     let called = false;
     const out = candidate({ type: 'hp.message', msg: { type: 'unknown' } }, kTrustedSender, () => {
+      called = true;
+    });
+    return out === true || called;
+  });
+  assert.equal(typeof listener, 'function');
+  return listener;
+}
+
+function findBusyChangedListener(runtimeListeners) {
+  const listener = runtimeListeners.find((candidate) => {
+    let called = false;
+    const out = candidate({ type: 'busy.changed', busy: true }, { tab: { id: 9 } }, () => {
       called = true;
     });
     return out === true || called;
@@ -583,6 +630,107 @@ test('service worker handles tab.open.request and posts tab.open via bridge', as
   assert.equal(payload?.type, 'tab.open');
   assert.equal(payload?.tab?.url, 'https://example.com/new');
   assert.equal(payload?.tab?.active, false);
+});
+
+test('service worker handles window.open.request and posts window.open via bridge', async () => {
+  const harness = makeHarness();
+  await importServiceWorkerFresh();
+  const listener = findBleCommandListener(harness.runtimeListeners, harness);
+  await callBleCommand(listener, {
+    type: 'window.open.request',
+    request_id: 'win-open-1',
+    url: 'https://example.com/new-window',
+    focused: true,
+    width: 900,
+    height: 700,
+    window_type: 'popup'
+  });
+
+  assert.equal(harness.createWindowCalls.length, 1);
+  assert.deepEqual(harness.createWindowCalls[0], {
+    url: 'https://example.com/new-window',
+    focused: true,
+    type: 'popup',
+    width: 900,
+    height: 700
+  });
+  const payload = harness.postedPayloads.find((entry) => entry?.request_id === 'win-open-1');
+  assert.equal(payload?.type, 'window.open');
+  assert.equal(payload?.window?.id, 31);
+  assert.equal(payload?.tab?.window_id, 31);
+  assert.equal(payload?.tab?.id, 52);
+});
+
+test('service worker handles calibration.open.request and reports calibration.status', async () => {
+  const harness = makeHarness();
+  await importServiceWorkerFresh();
+  const listener = findBleCommandListener(harness.runtimeListeners, harness);
+
+  await callBleCommand(listener, {
+    type: 'calibration.open.request',
+    request_id: 'cal-open-1',
+    session_id: 'sess-1',
+    width: 640,
+    height: 480,
+    focused: true
+  });
+
+  const openPayload = harness.postedPayloads.find((entry) => entry?.type === 'calibration.open');
+  assert.equal(openPayload?.session_id, 'sess-1');
+  assert.equal(openPayload?.window?.id, 31);
+
+  const calibrationMsgListener = harness.runtimeListeners.find((candidate) => {
+    let called = false;
+    const out = candidate({ type: 'calibration.pointer_found', session_id: 'sess-1', event: { kind: 'pointerenter' } }, kCalibrationSender, () => {
+      called = true;
+    });
+    return out === true || called;
+  });
+  assert.equal(typeof calibrationMsgListener, 'function');
+  calibrationMsgListener(
+    { type: 'calibration.pointer_found', session_id: 'sess-1', event: { kind: 'pointerenter', client_x: 10, client_y: 12 } },
+    kCalibrationSender,
+    () => {}
+  );
+
+  calibrationMsgListener(
+    { type: 'calibration.done_clicked', session_id: 'sess-1', ts: 12345 },
+    kCalibrationSender,
+    () => {}
+  );
+
+  await callBleCommand(listener, {
+    type: 'calibration.status.request',
+    request_id: 'cal-stat-1'
+  });
+
+  const statusPayload = harness.postedPayloads.find((entry) => entry?.type === 'calibration.status');
+  assert.equal(statusPayload?.found, true);
+  assert.equal(statusPayload?.event?.kind, 'pointerenter');
+  assert.equal(statusPayload?.done_clicked, true);
+  assert.equal(statusPayload?.done_clicked_at, 12345);
+});
+
+test('busy.changed routes state.set over hp.sendControl to firmware target', async () => {
+  const harness = makeHarness();
+  await importServiceWorkerFresh();
+  const listener = findBusyChangedListener(harness.runtimeListeners);
+  harness.postedPayloads.length = 0;
+  harness.postedControlPayloads.length = 0;
+
+  let response = null;
+  const returned = listener(
+    { type: 'busy.changed', busy: true },
+    { tab: { id: 44 } },
+    (msg) => { response = msg; }
+  );
+
+  assert.equal(returned, true);
+  await waitFor(() => harness.postedControlPayloads.length > 0 ? harness.postedControlPayloads[0] : null);
+  assert.deepEqual(response, { ok: true });
+  assert.equal(harness.postedPayloads.length, 0);
+  assert.equal(harness.postedControlPayloads[0].control_target, 'fw');
+  assert.deepEqual(harness.postedControlPayloads[0].payload, { type: 'state.set', busy: true });
 });
 
 test('service worker returns tab.open.error when chrome.tabs.create fails', async () => {

@@ -247,6 +247,13 @@ function notifySw(status, detail = null) {
   chrome.runtime.sendMessage({ type: 'ble.bridge.status', status, detail }).catch(() => {});
 }
 
+function resolveControlTarget(value) {
+  if (value === 'fw') return kTarget.FW;
+  if (value === 'hid') return kTarget.HID;
+  if (value === 'mcp') return kTarget.MCP;
+  return null;
+}
+
 function loadPreferredDeviceLocalFallback() {
   try {
     const id = globalThis.localStorage?.getItem(kPreferredDeviceStorageKey) || null;
@@ -503,5 +510,16 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .catch((err) => sendResponse({ ok: false, error: String(err?.message || err) }));
     return true;
   }
+  if (msg?.type === 'hp.sendControl' && msg.target === 'ble-page') {
+    const controlTarget = resolveControlTarget(msg.control_target);
+    if (controlTarget === null) {
+      sendResponse({ ok: false, error: 'invalid_control_target' });
+      return true;
+    }
+    healthState.suspendedUntil = Math.max(healthState.suspendedUntil, Date.now() + kHealthPingIntervalMs * 2);
+    hp.sendControl(msg.payload, controlTarget)
+      .then(() => { commandLog('SW->BLE', msg.payload); markBridgeActivity('hp_send_control_complete'); sendResponse({ ok: true }); })
+      .catch((err) => sendResponse({ ok: false, error: String(err?.message || err) }));
+    return true;
+  }
 });
-

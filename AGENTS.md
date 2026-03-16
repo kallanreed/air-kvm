@@ -67,6 +67,7 @@ No exceptions. No raw JSON. No direct BLE writes.
 - Caller: `halfpipe.send(obj)` / `halfpipe.sendControl(obj, target)` / `halfpipe.onMessage(cb)` / `halfpipe.onControl(cb)`
 - `halfpipe.send(obj)` serializes `obj` to JSON, splits into ≤255-byte chunks, wraps each as an AK CHUNK frame (`0x01`), sends one at a time, waits for ACK before next chunk.
 - `halfpipe.sendControl(obj, target)` sends a single CONTROL frame (`0x02`) — no chunking, no ACK wait. Payload must fit in ≤255 bytes.
+- These are the only valid ways to encode protocol messages into AK frames. They are not parallel protocols or optional convenience wrappers.
 - Firmware is a **dumb bridge**: forwards CHUNK/ACK/NACK/RESET between UART↔BLE unchanged. It never parses CHUNK payloads.
 - MCP HalfPipe: `writeFn` → `encodeFrame` → UART write.
 - Extension HalfPipe (`ble_bridge.js` `hp`): `writeFn` → `postBinary` → BLE write.
@@ -77,6 +78,10 @@ No exceptions. No raw JSON. No direct BLE writes.
 - **Use `hp.sendControl(msg, target)` in `ble_bridge.js`** for firmware-local commands (`state.request`, `state.set`, `fw.version.request`). These arrive as CONTROL frames; firmware handles them locally without forwarding.
 - Firmware **does not reassemble CHUNKs** received over BLE (insufficient RAM). Firmware-local commands must arrive as CONTROL frames.
 - **Never write raw JSON to BLE.** Firmware's BLE RX parser expects AK frames and silently drops raw JSON.
+- **Do not collapse these into a single “send via HalfPipe” rule.** `HalfPipe` is always required, but the mode matters:
+  `hp.send(...)` is for MCP-bound browser automation traffic; `hp.sendControl(..., kTarget.FW)` is for firmware-local commands only.
+- **Why this matters:** AK frames already contain explicit routing semantics on the wire: frame type plus target. The protocol already knows where traffic should go. If you invent another path, you are bypassing those AK routing semantics and creating a parallel protocol by accident.
+- **Known footgun:** content-script `busy.changed` events become firmware `state.set` commands. They must stay on HalfPipe but must use the CONTROL path to `kTarget.FW`, never the MCP-bound `hp.send(...)` path.
 
 ### Firmware → Extension (BLE)
 

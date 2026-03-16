@@ -100,6 +100,7 @@ MCP runtime:
 - `AIRKVM_SERIAL_BAUD` (default `115200`)
 - `AIRKVM_SERIAL_TIMEOUT_MS` (default `3000`)
 - `AIRKVM_UART_DEBUG=1` (enable UART debug logs to stderr)
+- `AIRKVM_UART_LOG_PATH=/tmp/airkvm-uart.log` (append UART logs to a file while MCP owns the serial port)
 
 Tool harness:
 - `AIRKVM_TOOL_TIMEOUT_MS` (default `120000`)

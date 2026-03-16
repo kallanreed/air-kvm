@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 import { UartTransport } from '../src/uart.js';
 import {
@@ -50,6 +53,10 @@ function makeTestTransport(commandTimeoutMs = 100) {
 const fwTool = { target: 'fw' };
 const hidTool = { target: 'hid' };
 const extTool = { target: 'extension' };
+const extToolWithMatcher = {
+  target: 'extension',
+  matchResponse: (cmd, msg) => msg?.type === 'tabs.list' && msg?.request_id === cmd.request_id
+};
 
 test('feedBytes routes valid CONTROL frame to halfpipe onControl', async () => {
   const { transport } = makeTestTransport();
@@ -128,6 +135,49 @@ test('send (extension tool) sends CHUNK frames and resolves on message', async (
 
   const result = await pending;
   assert.equal(result.data.type, 'tabs.list');
+  transport.close();
+});
+
+test('send (extension tool) ignores unmatched messages until request_id matches', async () => {
+  const { transport } = makeTestTransport();
+  await transport.open();
+
+  const pending = transport.send(
+    { type: 'tabs.list.request', request_id: 'tl-2' },
+    extTool,
+    { timeoutMs: 200 }
+  );
+
+  setTimeout(() => {
+    transport._handleMessage({ type: 'state.set', busy: true });
+    transport._handleMessage({ type: 'tabs.list', request_id: 'wrong-id', tabs: [{ id: 1 }] });
+    transport._handleMessage({ type: 'tabs.list', request_id: 'tl-2', tabs: [] });
+  }, 10);
+
+  const result = await pending;
+  assert.equal(result.data.request_id, 'tl-2');
+  assert.deepEqual(result.data.tabs, []);
+  transport.close();
+});
+
+test('send (extension tool) honors tool.matchResponse when provided', async () => {
+  const { transport } = makeTestTransport();
+  await transport.open();
+
+  const pending = transport.send(
+    { type: 'tabs.list.request', request_id: 'tl-3' },
+    extToolWithMatcher,
+    { timeoutMs: 200 }
+  );
+
+  setTimeout(() => {
+    transport._handleMessage({ type: 'bridge.logs', request_id: 'tl-3', lines: ['noise'] });
+    transport._handleMessage({ type: 'tabs.list', request_id: 'tl-3', tabs: [{ id: 7 }] });
+  }, 10);
+
+  const result = await pending;
+  assert.equal(result.data.type, 'tabs.list');
+  assert.deepEqual(result.data.tabs, [{ id: 7 }]);
   transport.close();
 });
 
@@ -219,6 +269,23 @@ test('close cleans up halfpipe', async () => {
   transport.close();
   assert.equal(transport.halfpipe, null);
   assert.equal(transport.opened, false);
+});
+
+test('log writes timestamped lines to configured file', async () => {
+  const logPath = path.join(os.tmpdir(), `airkvm-uart-${Date.now()}-${Math.random().toString(16).slice(2)}.log`);
+  const transport = new UartTransport({
+    portPath: 'TEST_PORT',
+    commandTimeoutMs: 100,
+    logPath
+  });
+
+  transport.log('test line');
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  transport.close();
+
+  const text = fs.readFileSync(logPath, 'utf8');
+  assert.match(text, /\[uart\] test line/);
+  fs.unlinkSync(logPath);
 });
 
 test('concurrent send() calls are serialized — second waits for first', async () => {

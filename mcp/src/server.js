@@ -106,7 +106,9 @@ export function createServer({ transport, send }) {
     }
 
     const command = tool.build(args);
-    const timeoutMs = tool.timeoutMs ?? 8000;
+    const timeoutMs = typeof tool.timeoutMs === 'function'
+      ? tool.timeoutMs(args)
+      : (tool.timeoutMs ?? 8000);
 
     transport.send(command, tool, { timeoutMs }).then(({ ok, data }) => {
       if (!ok) {

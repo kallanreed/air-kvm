@@ -12,11 +12,13 @@ const SERIAL_PORT = process.env.AIRKVM_SERIAL_PORT || '/dev/cu.usbserial-0001';
 const SERIAL_BAUD = Number.parseInt(process.env.AIRKVM_SERIAL_BAUD || '115200', 10);
 const SERIAL_TIMEOUT_MS = Number.parseInt(process.env.AIRKVM_SERIAL_TIMEOUT_MS || '3000', 10);
 const UART_DEBUG = process.env.AIRKVM_UART_DEBUG === '1';
+const UART_LOG_PATH = process.env.AIRKVM_UART_LOG_PATH || null;
 const transport = new UartTransport({
   portPath: SERIAL_PORT,
   baudRate: Number.isNaN(SERIAL_BAUD) ? 115200 : SERIAL_BAUD,
   commandTimeoutMs: Number.isNaN(SERIAL_TIMEOUT_MS) ? 3000 : SERIAL_TIMEOUT_MS,
-  debug: UART_DEBUG
+  debug: UART_DEBUG,
+  logPath: UART_LOG_PATH
 });
 
 const server = createServer({ transport, send });

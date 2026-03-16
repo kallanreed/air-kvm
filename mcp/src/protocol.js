@@ -204,6 +204,75 @@ const TOOL_DEFINITIONS = [
     build: (args) => ({ type: 'tab.open.request', request_id: reqId(args), url: args.url, active: args.active ?? true })
   },
   {
+    name: 'airkvm_open_window',
+    target: 'extension',
+    description: 'Open a new browser window on the target extension machine.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        request_id: { type: 'string' },
+        url: { type: 'string', maxLength: 2048 },
+        focused: { type: 'boolean' },
+        width: { type: 'integer' },
+        height: { type: 'integer' },
+        type: { type: 'string', enum: ['normal', 'popup'] }
+      },
+      required: ['request_id', 'url']
+    },
+    build: (args) => {
+      const command = {
+        type: 'window.open.request',
+        request_id: reqId(args),
+        url: args.url,
+        focused: args.focused ?? true
+      };
+      if (Number.isInteger(args?.width)) command.width = args.width;
+      if (Number.isInteger(args?.height)) command.height = args.height;
+      if (typeof args?.type === 'string') command.window_type = args.type;
+      return command;
+    }
+  },
+  {
+    name: 'airkvm_open_calibration_window',
+    target: 'extension',
+    description: 'Open the extension-hosted calibration popup window.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        request_id: { type: 'string' },
+        session_id: { type: 'string' },
+        focused: { type: 'boolean' },
+        width: { type: 'integer' },
+        height: { type: 'integer' }
+      },
+      required: ['request_id']
+    },
+    build: (args) => {
+      const command = {
+        type: 'calibration.open.request',
+        request_id: reqId(args),
+        session_id: typeof args?.session_id === 'string' && args.session_id.length > 0 ? args.session_id : reqId(args),
+        focused: args.focused ?? true
+      };
+      if (Number.isInteger(args?.width)) command.width = args.width;
+      if (Number.isInteger(args?.height)) command.height = args.height;
+      return command;
+    }
+  },
+  {
+    name: 'airkvm_calibration_status',
+    target: 'extension',
+    description: 'Fetch the current calibration popup pointer-detection status.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        request_id: { type: 'string' }
+      },
+      required: ['request_id']
+    },
+    build: (args) => ({ type: 'calibration.status.request', request_id: reqId(args) })
+  },
+  {
     name: 'airkvm_dom_snapshot',
     target: 'extension',
     timeoutMs: 10000,
@@ -304,12 +373,13 @@ const TOOL_DEFINITIONS = [
   {
     name: 'airkvm_bridge_logs',
     target: 'extension',
-    timeoutMs: 5000,
+    timeoutMs: (args) => Number.isInteger(args?.timeout_ms) ? args.timeout_ms : 15000,
     description: 'Retrieve the recent log lines from the AirKVM BLE bridge page.',
     inputSchema: {
       type: 'object',
       properties: {
-        request_id: { type: 'string' }
+        request_id: { type: 'string' },
+        timeout_ms: { type: 'integer', minimum: 1000, maximum: 120000 }
       },
       required: []
     },

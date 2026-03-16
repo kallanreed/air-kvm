@@ -91,4 +91,5 @@ Add the following to your `mcp.json` (or equivalent MCP client config), adjustin
 | `AIRKVM_SERIAL_PORT` | UART device path (`COM3` on Windows, `/dev/cu.usbserial-*` on macOS) | `/dev/cu.usbserial-0001` |
 | `AIRKVM_SERIAL_BAUD` | UART baud rate | `115200` |
 | `AIRKVM_SERIAL_TIMEOUT_MS` | Command timeout in milliseconds | `3000` |
-| `AIRKVM_UART_DEBUG` | Set to `1` to enable debug logging | off |
+| `AIRKVM_UART_DEBUG` | Set to `1` to enable debug logging to stderr | off |
+| `AIRKVM_UART_LOG_PATH` | Append UART logs to a file while MCP owns the serial port | unset |

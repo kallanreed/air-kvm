@@ -297,19 +297,14 @@ async function runTests(mcp, suite) {
   // viewport top = window top + toolbar height; CDP banner is gone now.
 
   // ── 4. HID mouse actions ──────────────────────────────────────────────────────
+  // Important: do not issue any further exec_js_tab calls once HID interaction
+  // starts. On macOS/Chromium the active debugger infobar appears at the top of
+  // the page during CDP work and shifts content, which invalidates the rects we
+  // just measured for HID targeting.
   // Establish mouse origin at top-left corner then move relatively to each target.
   let curX = 0;
   let curY = 0;
   await tool('airkvm_mouse_move_rel', { dx: -32000, dy: -32000 });
-
-  // Focus browser window — click on title bar area (winTop + ~50 = inside chrome chrome but above toolbar)
-  suite.section('HID click: focus browser window');
-  const focusX = winLeft + 400;
-  const focusY = winTop + 50;
-  await tool('airkvm_mouse_move_rel', { dx: focusX - curX, dy: focusY - curY });
-  curX = focusX; curY = focusY;
-  await tool('airkvm_mouse_click', { button: 'left' });
-  suite.assert(true, 'focus click sent');
 
   // Click each button
   const viewportTop = winTop + toolbarHeight;
@@ -352,6 +347,7 @@ async function runTests(mcp, suite) {
   }
 
   // ── 7. Validate via CDP ───────────────────────────────────────────────────────
+  // This re-enters the debugger path intentionally after HID is finished.
   suite.section('validate: textarea contains button presses + ASCII');
   const finalRes = parse(await tool('airkvm_exec_js_tab', {
     request_id: reqNum(), tab_id: tabId,

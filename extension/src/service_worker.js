@@ -5,6 +5,7 @@
 // Also manages the ble_bridge.html tab lifecycle and CDP debugger sessions.
 import { resolveScreenshotConfig } from './screenshot_protocol.js';
 const kBleBridgePagePath = 'ble_bridge.html';
+const kCalibrationPagePath = 'calibration.html';
 const kDebugDefault = false;
 const kDebugStorageKey = 'airkvmVerboseBridgeLog';
 const kScreenshotCaptureTimeoutMs = 25000;
@@ -25,6 +26,18 @@ const kDomSnapshotActionableLimitPerFrame = 50;
 const kDomSnapshotMaxTransferBytes = 2 * 1024 * 1024;
 let lastAutomationTabId = null;
 let jsExecInFlight = false;
+let calibrationState = {
+  session_id: null,
+  found: false,
+  event: null,
+  event_count: 0,
+  done_clicked: false,
+  done_clicked_at: null,
+  done_click_event: null,
+  layout: null,
+  window_id: null,
+  tab_id: null
+};
 const kSwInstanceId = `sw_${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
 let debugEnabled = kDebugDefault;
 
@@ -102,6 +115,13 @@ function isTrustedBleCommandSender(sender) {
   const expectedBridgeUrl = chrome.runtime.getURL(kBleBridgePagePath);
   const senderUrl = String(sender.url || sender?.tab?.url || '');
   return senderUrl === expectedBridgeUrl || senderUrl.startsWith(`${expectedBridgeUrl}#`);
+}
+
+function isTrustedCalibrationSender(sender) {
+  if (!sender || sender.id !== chrome.runtime.id) return false;
+  const expected = chrome.runtime.getURL(kCalibrationPagePath);
+  const senderUrl = String(sender.url || sender?.tab?.url || '');
+  return senderUrl === expected || senderUrl.startsWith(`${expected}?`);
 }
 
 async function resolveTargetTab(preferredTabId = null) {
@@ -338,6 +358,49 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ ok: true });
     return true;
   }
+  if (msg.type === 'calibration.pointer_found') {
+    if (!isTrustedCalibrationSender(sender)) {
+      sendResponse({ ok: false, error: 'untrusted_sender' });
+      return true;
+    }
+    if (typeof msg.session_id === 'string' && calibrationState.session_id && msg.session_id !== calibrationState.session_id) {
+      sendResponse({ ok: false, error: 'stale_calibration_session' });
+      return true;
+    }
+    calibrationState.found = true;
+    calibrationState.event = msg.event || null;
+    calibrationState.event_count += 1;
+    sendResponse({ ok: true });
+    return true;
+  }
+  if (msg.type === 'calibration.done_clicked') {
+    if (!isTrustedCalibrationSender(sender)) {
+      sendResponse({ ok: false, error: 'untrusted_sender' });
+      return true;
+    }
+    if (typeof msg.session_id === 'string' && calibrationState.session_id && msg.session_id !== calibrationState.session_id) {
+      sendResponse({ ok: false, error: 'stale_calibration_session' });
+      return true;
+    }
+    calibrationState.done_clicked = true;
+    calibrationState.done_clicked_at = Number.isInteger(msg.ts) ? msg.ts : Date.now();
+    calibrationState.done_click_event = msg.event || null;
+    sendResponse({ ok: true });
+    return true;
+  }
+  if (msg.type === 'calibration.layout') {
+    if (!isTrustedCalibrationSender(sender)) {
+      sendResponse({ ok: false, error: 'untrusted_sender' });
+      return true;
+    }
+    if (typeof msg.session_id === 'string' && calibrationState.session_id && msg.session_id !== calibrationState.session_id) {
+      sendResponse({ ok: false, error: 'stale_calibration_session' });
+      return true;
+    }
+    calibrationState.layout = msg.layout || null;
+    sendResponse({ ok: true });
+    return true;
+  }
   if (msg.type.startsWith('ble.')) {
     // Internal bridge control messages are handled by dedicated listeners below.
     return;
@@ -353,8 +416,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     lastAutomationTabId = sender.tab.id;
   }
 
-  // Translate busy.changed into a firmware state.set command.
-  sendViaHalfPipe({ type: 'state.set', busy: Boolean(msg.busy) })
+  // Protocol rule: stay on HalfPipe, but firmware-local commands must use the
+  // HalfPipe CONTROL path to kTarget.FW. Do not send state.set through the
+  // normal MCP-bound hp.send/sendViaHalfPipe message path.
+  sendControlViaHalfPipe({ type: 'state.set', busy: Boolean(msg.busy) }, 'fw')
     .then(() => sendResponse({ ok: true }))
     .catch(() => sendResponse({ ok: false }));
   return true;
@@ -883,6 +948,124 @@ async function sendOpenTab(command) {
   });
 }
 
+async function sendOpenWindow(command) {
+  const requestId = command?.request_id || makeRequestId();
+  const url = typeof command?.url === 'string' ? command.url : '';
+  const focused = typeof command?.focused === 'boolean' ? command.focused : true;
+  const width = Number.isInteger(command?.width) ? command.width : undefined;
+  const height = Number.isInteger(command?.height) ? command.height : undefined;
+  const windowType = command?.window_type === 'popup' ? 'popup' : 'normal';
+
+  if (!url || url.length > 2048 || (!url.startsWith('http://') && !url.startsWith('https://'))) {
+    throw new Error('invalid_window_open_request');
+  }
+  if (!chrome?.windows?.create) {
+    throw new Error('window_create_unavailable');
+  }
+
+  const createOpts = { url, focused, type: windowType };
+  if (Number.isInteger(width)) createOpts.width = width;
+  if (Number.isInteger(height)) createOpts.height = height;
+
+  const createdWindow = await chrome.windows.create(createOpts);
+  const firstTab = Array.isArray(createdWindow?.tabs) ? createdWindow.tabs[0] : null;
+  const normalizedTab = {
+    id: firstTab?.id ?? null,
+    window_id: createdWindow?.id ?? firstTab?.windowId ?? null,
+    active: Boolean(firstTab?.active ?? true),
+    title: firstTab?.title || '',
+    url: firstTab?.url || url
+  };
+  if (isAutomationCandidateTab(firstTab) && Number.isInteger(firstTab?.id)) {
+    lastAutomationTabId = firstTab.id;
+  }
+
+  await sendViaHalfPipe({
+    type: 'window.open',
+    request_id: requestId,
+    window: {
+      id: createdWindow?.id ?? null,
+      focused: Boolean(createdWindow?.focused ?? focused),
+      type: createdWindow?.type || windowType,
+      bounds: normalizeWindowBounds({
+        windowState: createdWindow?.state,
+        left: createdWindow?.left,
+        top: createdWindow?.top,
+        width: createdWindow?.width,
+        height: createdWindow?.height
+      })
+    },
+    tab: normalizedTab,
+    ts: Date.now()
+  });
+}
+
+async function sendOpenCalibrationWindow(command) {
+  const requestId = command?.request_id || makeRequestId();
+  const sessionId = command?.session_id || makeRequestId();
+  const width = Number.isInteger(command?.width) ? command.width : 900;
+  const height = Number.isInteger(command?.height) ? command.height : 700;
+  const focused = typeof command?.focused === 'boolean' ? command.focused : true;
+  const url = `${chrome.runtime.getURL(kCalibrationPagePath)}?session_id=${encodeURIComponent(sessionId)}`;
+  const createdWindow = await chrome.windows.create({ url, focused, type: 'popup', width, height });
+  const firstTab = Array.isArray(createdWindow?.tabs) ? createdWindow.tabs[0] : null;
+  calibrationState = {
+    session_id: sessionId,
+    found: false,
+    event: null,
+    event_count: 0,
+    done_clicked: false,
+    done_clicked_at: null,
+    done_click_event: null,
+    layout: null,
+    window_id: createdWindow?.id ?? null,
+    tab_id: firstTab?.id ?? null
+  };
+  await sendViaHalfPipe({
+    type: 'calibration.open',
+    request_id: requestId,
+    session_id: sessionId,
+    window: {
+      id: createdWindow?.id ?? null,
+      focused: Boolean(createdWindow?.focused ?? focused),
+      type: createdWindow?.type || 'popup',
+      bounds: normalizeWindowBounds({
+        windowState: createdWindow?.state,
+        left: createdWindow?.left,
+        top: createdWindow?.top,
+        width: createdWindow?.width,
+        height: createdWindow?.height
+      })
+    },
+    tab: {
+      id: firstTab?.id ?? null,
+      window_id: createdWindow?.id ?? firstTab?.windowId ?? null,
+      active: Boolean(firstTab?.active ?? true),
+      title: firstTab?.title || '',
+      url: firstTab?.url || url
+    },
+    ts: Date.now()
+  });
+}
+
+async function sendCalibrationStatus(command) {
+  await sendViaHalfPipe({
+    type: 'calibration.status',
+    request_id: command?.request_id || makeRequestId(),
+    session_id: calibrationState.session_id,
+    found: calibrationState.found,
+    event: calibrationState.event,
+    event_count: calibrationState.event_count,
+    done_clicked: calibrationState.done_clicked,
+    done_clicked_at: calibrationState.done_clicked_at,
+    done_click_event: calibrationState.done_click_event,
+    layout: calibrationState.layout,
+    window_id: calibrationState.window_id,
+    tab_id: calibrationState.tab_id,
+    ts: Date.now()
+  });
+}
+
 function normalizeWindowBounds(bounds) {
   if (!bounds || typeof bounds !== 'object') {
     return null;
@@ -1048,6 +1231,45 @@ const kBleCommandHandlers = {
       });
     }
   ),
+  'window.open.request': (command) => runBridgeHandler(
+    command,
+    'sendOpenWindow',
+    sendOpenWindow,
+    async (cmd, detail) => {
+      await sendViaHalfPipe({
+        type: 'window.open.error',
+        request_id: cmd?.request_id || null,
+        error: clipText(detail || 'window_open_failed'),
+        ts: Date.now()
+      });
+    }
+  ),
+  'calibration.open.request': (command) => runBridgeHandler(
+    command,
+    'sendOpenCalibrationWindow',
+    sendOpenCalibrationWindow,
+    async (cmd, detail) => {
+      await sendViaHalfPipe({
+        type: 'calibration.open.error',
+        request_id: cmd?.request_id || null,
+        error: clipText(detail || 'calibration_open_failed'),
+        ts: Date.now()
+      });
+    }
+  ),
+  'calibration.status.request': (command) => runBridgeHandler(
+    command,
+    'sendCalibrationStatus',
+    sendCalibrationStatus,
+    async (cmd, detail) => {
+      await sendViaHalfPipe({
+        type: 'calibration.status.error',
+        request_id: cmd?.request_id || null,
+        error: clipText(detail || 'calibration_status_failed'),
+        ts: Date.now()
+      });
+    }
+  ),
   'js.exec.request': (command) => runBridgeHandler(
     command,
     'sendJsExec',
@@ -1121,6 +1343,24 @@ function sendViaHalfPipe(payload) {
     try {
       infoLog('cmd ->', { type: payload?.type, request_id: payload?.request_id ?? null });
       const res = await chrome.runtime.sendMessage({ type: 'hp.send', target: 'ble-page', payload });
+      return Boolean(res?.ok);
+    } catch {
+      return false;
+    }
+  });
+  return _sendQueue;
+}
+
+function sendControlViaHalfPipe(payload, target) {
+  _sendQueue = _sendQueue.then(async () => {
+    try {
+      infoLog('cmd ->', { type: payload?.type, request_id: payload?.request_id ?? null });
+      const res = await chrome.runtime.sendMessage({
+        type: 'hp.sendControl',
+        target: 'ble-page',
+        control_target: target,
+        payload
+      });
       return Boolean(res?.ok);
     } catch {
       return false;

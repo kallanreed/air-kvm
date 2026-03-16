@@ -36,6 +36,9 @@ test('tools/list includes structured tools', () => {
     'airkvm_list_tabs',
     'airkvm_window_bounds',
     'airkvm_open_tab',
+    'airkvm_open_window',
+    'airkvm_open_calibration_window',
+    'airkvm_calibration_status',
     'airkvm_dom_snapshot',
     'airkvm_exec_js_tab',
     'airkvm_screenshot_tab',
@@ -170,6 +173,89 @@ test('airkvm_open_tab returns structured json', async () => {
   assert.equal(payload.tab.id, 101);
 });
 
+test('airkvm_open_window returns structured json', async () => {
+  const { sent, server } = makeHarness({
+    send: async (command) => ({
+      ok: true,
+      data: {
+        type: 'window.open',
+        request_id: command.request_id,
+        window: {
+          id: 77,
+          focused: true,
+          type: 'popup',
+          bounds: { left: 100, top: 80, width: 900, height: 700, window_state: 'normal' }
+        },
+        tab: { id: 201, window_id: 77, active: true, title: 'Example', url: 'https://example.com' },
+        ts: 123
+      }
+    }),
+  });
+  server.handleRequest({
+    jsonrpc: '2.0', id: 17,
+    method: 'tools/call',
+    params: {
+      name: 'airkvm_open_window',
+      arguments: { request_id: 'win-1', url: 'https://example.com', focused: true, width: 900, height: 700, type: 'popup' }
+    }
+  });
+  await new Promise((r) => setTimeout(r, 50));
+  const payload = JSON.parse(sent[0].result.content[0].text);
+  assert.equal(payload.type, 'window.open');
+  assert.equal(payload.window.id, 77);
+  assert.equal(payload.tab.window_id, 77);
+});
+
+test('airkvm_open_calibration_window returns structured json', async () => {
+  const { sent, server } = makeHarness({
+    send: async (command) => ({
+      ok: true,
+      data: {
+        type: 'calibration.open',
+        request_id: command.request_id,
+        session_id: command.session_id,
+        window: { id: 88, focused: true, type: 'popup', bounds: { left: 20, top: 30, width: 640, height: 480 } },
+        tab: { id: 301, window_id: 88, active: true, title: 'Calibration', url: 'chrome-extension://test/calibration.html' }
+      }
+    }),
+  });
+  server.handleRequest({
+    jsonrpc: '2.0', id: 19,
+    method: 'tools/call',
+    params: { name: 'airkvm_open_calibration_window', arguments: { request_id: 'cal-open-1', session_id: 'sess-1' } }
+  });
+  await new Promise((r) => setTimeout(r, 50));
+  const payload = JSON.parse(sent[0].result.content[0].text);
+  assert.equal(payload.type, 'calibration.open');
+  assert.equal(payload.session_id, 'sess-1');
+  assert.equal(payload.window.id, 88);
+});
+
+test('airkvm_calibration_status returns structured json', async () => {
+  const { sent, server } = makeHarness({
+    send: async (command) => ({
+      ok: true,
+      data: {
+        type: 'calibration.status',
+        request_id: command.request_id,
+        session_id: 'sess-1',
+        found: true,
+        event: { kind: 'pointerenter', client_x: 12, client_y: 14 }
+      }
+    }),
+  });
+  server.handleRequest({
+    jsonrpc: '2.0', id: 20,
+    method: 'tools/call',
+    params: { name: 'airkvm_calibration_status', arguments: { request_id: 'cal-stat-1' } }
+  });
+  await new Promise((r) => setTimeout(r, 50));
+  const payload = JSON.parse(sent[0].result.content[0].text);
+  assert.equal(payload.type, 'calibration.status');
+  assert.equal(payload.found, true);
+  assert.equal(payload.event.kind, 'pointerenter');
+});
+
 test('airkvm_exec_js_tab returns structured json', async () => {
   const { sent, server } = makeHarness({
     send: async (command) => ({
@@ -248,6 +334,37 @@ test('airkvm_screenshot_tab uses transport.send', async () => {
   assert.equal(payload.request_id, 'shot-hp-1');
   assert.equal(payload.mime, 'image/jpeg');
   assert.equal(payload.base64, '/9j/fakebase64');
+});
+
+test('airkvm_bridge_logs passes timeout override to transport.send', async () => {
+  let seenTimeoutMs = null;
+  const { sent, server } = makeHarness({
+    send: async (command, _tool, options) => {
+      seenTimeoutMs = options?.timeoutMs ?? null;
+      return {
+        ok: true,
+        data: {
+          type: 'bridge.logs',
+          request_id: command.request_id,
+          lines: ['line 1']
+        }
+      };
+    },
+  });
+  server.handleRequest({
+    jsonrpc: '2.0', id: 4,
+    method: 'tools/call',
+    params: {
+      name: 'airkvm_bridge_logs',
+      arguments: { request_id: 'bridge-1', timeout_ms: 30000 }
+    }
+  });
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(sent[0].isError, undefined);
+  assert.equal(seenTimeoutMs, 30000);
+  const payload = JSON.parse(sent[0].result.content[0].text);
+  assert.equal(payload.request_id, 'bridge-1');
+  assert.deepEqual(payload.lines, ['line 1']);
 });
 
 test('transport error surfaces as transport_error', async () => {

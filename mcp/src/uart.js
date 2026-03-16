@@ -2,6 +2,7 @@
 // and serializes outgoing commands. Firmware/HID commands are sent as CONTROL frames;
 // extension-bound commands are sent as CHUNK frames relayed over BLE by the firmware.
 
+import fs from 'node:fs';
 import { SerialPort } from 'serialport';
 import { kTarget } from '../../shared/binary_frame.js';
 import { HalfPipe } from '../../shared/halfpipe.js';
@@ -11,17 +12,28 @@ export class UartTransport {
     portPath,
     baudRate = 115200,
     commandTimeoutMs = 3000,
-    debug = false
+    debug = false,
+    logPath = null
   } = {}) {
     this.portPath = portPath;
     this.baudRate = baudRate;
     this.commandTimeoutMs = commandTimeoutMs;
     this.debug = debug;
+    this.logPath = typeof logPath === 'string' && logPath.length > 0 ? logPath : null;
     this.serialPort = null;
     this.opened = false;
     this.halfpipe = null;
-    this._pending = null; // { isLocal, resolve, reject, timer }
+    this._pending = null; // { isLocal, matches, resolve, reject, timer }
     this._callQueue = Promise.resolve(); // serializes concurrent send() calls
+    this._logStream = null;
+
+    if (this.logPath) {
+      try {
+        this._logStream = fs.createWriteStream(this.logPath, { flags: 'a' });
+      } catch (err) {
+        process.stderr.write(`[uart] log file open failed path=${this.logPath} error=${String(err?.message || err)}\n`);
+      }
+    }
   }
 
   async open() {
@@ -76,8 +88,13 @@ export class UartTransport {
   }
 
   log(msg) {
-    if (!this.debug && !msg.startsWith('[fw-log]')) return;
-    process.stderr.write(`[uart] ${msg}\n`);
+    const line = `[uart] ${msg}`;
+    if (this.debug || msg.startsWith('[fw-log]')) {
+      process.stderr.write(`${line}\n`);
+    }
+    if (this._logStream) {
+      this._logStream.write(`${new Date().toISOString()} ${line}\n`);
+    }
   }
 
   _handleControl(msg) {
@@ -90,7 +107,7 @@ export class UartTransport {
       return;
     }
     const p = this._pending;
-    if (p?.isLocal) {
+    if (p?.isLocal && p.matches(msg)) {
       this._pending = null;
       clearTimeout(p.timer);
       p.resolve({ ok: msg?.ok !== false, data: msg });
@@ -99,11 +116,26 @@ export class UartTransport {
 
   _handleMessage(msg) {
     const p = this._pending;
-    if (p && !p.isLocal) {
+    if (p && !p.isLocal && p.matches(msg)) {
       this._pending = null;
       clearTimeout(p.timer);
       p.resolve({ ok: !(msg?.ok === false || msg?.error), data: msg });
+      return;
     }
+    this.log(`ignoring unmatched message: ${JSON.stringify(msg)}`);
+  }
+
+  _buildMatcher(command, tool, isLocal) {
+    if (typeof tool?.matchResponse === 'function') {
+      return (msg) => tool.matchResponse(command, msg);
+    }
+    if (isLocal) {
+      return (msg) => msg?.type !== 'boot';
+    }
+    if (typeof command?.request_id === 'string' && command.request_id.length > 0) {
+      return (msg) => msg?.request_id === command.request_id;
+    }
+    return () => true;
   }
 
   // Send a command and wait for the response.
@@ -118,20 +150,24 @@ export class UartTransport {
         : kTarget.EXTENSION;
 
       return new Promise((resolve, reject) => {
+        const matches = this._buildMatcher(command, tool, isLocal);
         const timer = setTimeout(() => {
           this.log(`send timeout command=${JSON.stringify(command)}`);
-          this._pending = null;
+          if (this._pending?.resolve === resolve) this._pending = null;
           reject(new Error('device_timeout'));
         }, timeoutMs);
 
-        this._pending = { isLocal, resolve, reject, timer };
+        this._pending = { isLocal, matches, resolve, reject, timer };
 
         const sendPromise = isLocal
           ? this.halfpipe.sendControl(command, halfpipeTarget)
           : this.halfpipe.send(command, halfpipeTarget);
 
         sendPromise.catch((err) => {
-          if (this._pending) { clearTimeout(this._pending.timer); this._pending = null; }
+          if (this._pending?.resolve === resolve) {
+            clearTimeout(this._pending.timer);
+            this._pending = null;
+          }
           reject(err);
         });
       });
@@ -152,5 +188,9 @@ export class UartTransport {
     }
     this.serialPort = null;
     this.opened = false;
+    if (this._logStream) {
+      this._logStream.end();
+      this._logStream = null;
+    }
   }
 }
