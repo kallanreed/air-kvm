@@ -38,8 +38,6 @@ test('tools/list includes structured tools', () => {
     'airkvm_window_bounds',
     'airkvm_open_tab',
     'airkvm_open_window',
-    'airkvm_open_calibration_window',
-    'airkvm_calibration_status',
     'airkvm_dom_snapshot',
     'airkvm_exec_js_tab',
     'airkvm_screenshot_tab',
@@ -135,6 +133,11 @@ test('airkvm_window_bounds returns structured json', async () => {
         tab_id: 2,
         window_id: 5,
         bounds: { left: 80, top: 40, width: 1280, height: 900, window_state: 'normal' },
+        screen: {
+          device_pixel_ratio: 2,
+          screen: { width: 1512, height: 982 },
+          viewport: { inner_width: 757, inner_height: 727, outer_width: 765, outer_height: 817, screen_x: 9, screen_y: 57 }
+        },
         ts: 55
       }
     }),
@@ -149,6 +152,8 @@ test('airkvm_window_bounds returns structured json', async () => {
   assert.equal(payload.type, 'window.bounds');
   assert.equal(payload.request_id, 'wb-1');
   assert.equal(payload.bounds.left, 80);
+  assert.equal(payload.screen.device_pixel_ratio, 2);
+  assert.equal(payload.screen.screen.width, 1512);
 });
 
 test('airkvm_open_tab returns structured json', async () => {
@@ -205,56 +210,6 @@ test('airkvm_open_window returns structured json', async () => {
   assert.equal(payload.type, 'window.open');
   assert.equal(payload.window.id, 77);
   assert.equal(payload.tab.window_id, 77);
-});
-
-test('airkvm_open_calibration_window returns structured json', async () => {
-  const { sent, server } = makeHarness({
-    send: async (command) => ({
-      ok: true,
-      data: {
-        type: 'calibration.open',
-        request_id: command.request_id,
-        session_id: command.session_id,
-        window: { id: 88, focused: true, type: 'popup', bounds: { left: 20, top: 30, width: 640, height: 480 } },
-        tab: { id: 301, window_id: 88, active: true, title: 'Calibration', url: 'chrome-extension://test/calibration.html' }
-      }
-    }),
-  });
-  server.handleRequest({
-    jsonrpc: '2.0', id: 19,
-    method: 'tools/call',
-    params: { name: 'airkvm_open_calibration_window', arguments: { request_id: 'cal-open-1', session_id: 'sess-1' } }
-  });
-  await new Promise((r) => setTimeout(r, 50));
-  const payload = JSON.parse(sent[0].result.content[0].text);
-  assert.equal(payload.type, 'calibration.open');
-  assert.equal(payload.session_id, 'sess-1');
-  assert.equal(payload.window.id, 88);
-});
-
-test('airkvm_calibration_status returns structured json', async () => {
-  const { sent, server } = makeHarness({
-    send: async (command) => ({
-      ok: true,
-      data: {
-        type: 'calibration.status',
-        request_id: command.request_id,
-        session_id: 'sess-1',
-        found: true,
-        event: { kind: 'pointerenter', client_x: 12, client_y: 14 }
-      }
-    }),
-  });
-  server.handleRequest({
-    jsonrpc: '2.0', id: 20,
-    method: 'tools/call',
-    params: { name: 'airkvm_calibration_status', arguments: { request_id: 'cal-stat-1' } }
-  });
-  await new Promise((r) => setTimeout(r, 50));
-  const payload = JSON.parse(sent[0].result.content[0].text);
-  assert.equal(payload.type, 'calibration.status');
-  assert.equal(payload.found, true);
-  assert.equal(payload.event.kind, 'pointerenter');
 });
 
 test('airkvm_exec_js_tab returns structured json', async () => {

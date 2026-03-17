@@ -5,10 +5,6 @@ const kTrustedSender = {
   id: 'test',
   url: 'chrome-extension://test/ble_bridge.html'
 };
-const kCalibrationSender = {
-  id: 'test',
-  url: 'chrome-extension://test/calibration.html?session_id=sess-1'
-};
 
 function makeHarness() {
   const postedPayloads = [];
@@ -18,6 +14,7 @@ function makeHarness() {
   const cdpCommandCalls = [];
   const cdpAttachCalls = [];
   const cdpDetachCalls = [];
+  const scriptingCalls = [];
   const createTabCalls = [];
   const createWindowCalls = [];
   const tabCaptureCalls = [];
@@ -161,6 +158,28 @@ function makeHarness() {
         };
       }
     },
+    scripting: {
+      executeScript: async (opts) => {
+        scriptingCalls.push(opts);
+        return [{
+          result: {
+            device_pixel_ratio: 2,
+            screen: {
+              width: 1512,
+              height: 982
+            },
+            viewport: {
+              inner_width: 757,
+              inner_height: 727,
+              outer_width: 765,
+              outer_height: 817,
+              screen_x: 9,
+              screen_y: 57
+            }
+          }
+        }];
+      }
+    },
     debugger: {
       attach: (_target, _version, cb) => {
         cdpAttachCalls.push(_target);
@@ -248,6 +267,7 @@ function makeHarness() {
     cdpCommandCalls,
     cdpAttachCalls,
     cdpDetachCalls,
+    scriptingCalls,
     createTabCalls,
     createWindowCalls,
     tabCaptureCalls,
@@ -661,56 +681,6 @@ test('service worker handles window.open.request and posts window.open via bridg
   assert.equal(payload?.tab?.id, 52);
 });
 
-test('service worker handles calibration.open.request and reports calibration.status', async () => {
-  const harness = makeHarness();
-  await importServiceWorkerFresh();
-  const listener = findBleCommandListener(harness.runtimeListeners, harness);
-
-  await callBleCommand(listener, {
-    type: 'calibration.open.request',
-    request_id: 'cal-open-1',
-    session_id: 'sess-1',
-    width: 640,
-    height: 480,
-    focused: true
-  });
-
-  const openPayload = harness.postedPayloads.find((entry) => entry?.type === 'calibration.open');
-  assert.equal(openPayload?.session_id, 'sess-1');
-  assert.equal(openPayload?.window?.id, 31);
-
-  const calibrationMsgListener = harness.runtimeListeners.find((candidate) => {
-    let called = false;
-    const out = candidate({ type: 'calibration.pointer_found', session_id: 'sess-1', event: { kind: 'pointerenter' } }, kCalibrationSender, () => {
-      called = true;
-    });
-    return out === true || called;
-  });
-  assert.equal(typeof calibrationMsgListener, 'function');
-  calibrationMsgListener(
-    { type: 'calibration.pointer_found', session_id: 'sess-1', event: { kind: 'pointerenter', client_x: 10, client_y: 12 } },
-    kCalibrationSender,
-    () => {}
-  );
-
-  calibrationMsgListener(
-    { type: 'calibration.done_clicked', session_id: 'sess-1', ts: 12345 },
-    kCalibrationSender,
-    () => {}
-  );
-
-  await callBleCommand(listener, {
-    type: 'calibration.status.request',
-    request_id: 'cal-stat-1'
-  });
-
-  const statusPayload = harness.postedPayloads.find((entry) => entry?.type === 'calibration.status');
-  assert.equal(statusPayload?.found, true);
-  assert.equal(statusPayload?.event?.kind, 'pointerenter');
-  assert.equal(statusPayload?.done_clicked, true);
-  assert.equal(statusPayload?.done_clicked_at, 12345);
-});
-
 test('busy.changed routes state.set over hp.sendControl to firmware target', async () => {
   const harness = makeHarness();
   await importServiceWorkerFresh();
@@ -771,6 +741,12 @@ test('service worker handles window.bounds.request and posts window.bounds via b
     height: 900,
     window_state: 'normal'
   });
+  assert.equal(payload?.screen?.device_pixel_ratio, 2);
+  assert.equal(payload?.screen?.screen?.width, 1512);
+  assert.equal(payload?.screen?.screen?.height, 982);
+  assert.equal(payload?.screen?.viewport?.screen_x, 9);
+  assert.equal(payload?.screen?.viewport?.screen_y, 57);
+  assert.equal(harness.scriptingCalls.length, 1);
   const cdpCall = harness.cdpCommandCalls.find((entry) => entry.method === 'Browser.getWindowForTarget');
   assert.equal(Boolean(cdpCall), true);
 });

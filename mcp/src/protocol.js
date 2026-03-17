@@ -247,46 +247,6 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
-    name: 'airkvm_open_calibration_window',
-    target: 'extension',
-    description: 'Open the extension-hosted calibration popup window.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        request_id: { type: 'string' },
-        session_id: { type: 'string' },
-        focused: { type: 'boolean' },
-        width: { type: 'integer' },
-        height: { type: 'integer' }
-      },
-      required: ['request_id']
-    },
-    build: (args) => {
-      const command = {
-        type: 'calibration.open.request',
-        request_id: reqId(args),
-        session_id: typeof args?.session_id === 'string' && args.session_id.length > 0 ? args.session_id : reqId(args),
-        focused: args.focused ?? true
-      };
-      if (Number.isInteger(args?.width)) command.width = args.width;
-      if (Number.isInteger(args?.height)) command.height = args.height;
-      return command;
-    }
-  },
-  {
-    name: 'airkvm_calibration_status',
-    target: 'extension',
-    description: 'Fetch the current calibration popup pointer-detection status.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        request_id: { type: 'string' }
-      },
-      required: ['request_id']
-    },
-    build: (args) => ({ type: 'calibration.status.request', request_id: reqId(args) })
-  },
-  {
     name: 'airkvm_dom_snapshot',
     target: 'extension',
     timeoutMs: 10000,
