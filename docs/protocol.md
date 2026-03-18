@@ -302,6 +302,7 @@ determines the routing target and which HalfPipe method is used.
 | `airkvm_screenshot_desktop` | `screenshot.request` | `extension` | CHUNK |
 
 Notes:
+- `mouse.move_abs` / `airkvm_mouse_move_abs` use HID logical coordinates in the 15-bit unsigned range `0..32767`. They are not screen pixels.
 - `airkvm_exec_js_tab` is the CDP-backed path and may trigger debugger UI.
 - `airkvm_inject_js_tab` is the silent extension scripting path for deterministic DOM setup/readback.
 
@@ -310,3 +311,8 @@ Notes:
 BLE HID (HOGP) is always enabled. The firmware advertises both the UART control
 service and HID service simultaneously. BLE security (authenticated pairing) is
 always on.
+
+For absolute mouse injection:
+- `mouse.move_abs` uses HID logical units, not CSS pixels or desktop pixels
+- the current absolute report exposes a `0..32767` range on both axes
+- callers must map browser/screen coordinates into that logical HID range themselves

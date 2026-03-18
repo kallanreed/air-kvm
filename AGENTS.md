@@ -27,7 +27,7 @@ Run all checks from repo root:
 Scripts in `scripts/`:
 - `./scripts/ci.sh`: Full project CI checks.
 - `./scripts/firmware-host-test.sh`: Firmware host-side sanity path when `pio` is unavailable.
-- `node scripts/poc-smoke.mjs`: End-to-end smoke test (MCP + firmware command path).
+- `node scripts/mcp-fw-integration.mjs`: MCP↔firmware integration test over the live command path.
 - `node scripts/mcp-tool-call.mjs <tool_name> [json_args]`: MCP harness for one-off tool calls against a live server/firmware path.
 
 Run components individually:
@@ -38,7 +38,7 @@ Run components individually:
 - `cd firmware && pio test -e native`: Run firmware protocol tests on host.
 - `cd firmware && pio run -e esp32dev`: Build firmware for ESP32.
 - `cd firmware && pio device monitor`: Open serial monitor.
-- `AIRKVM_SERIAL_PORT=/dev/cu.usbserial-0001 node scripts/poc-smoke.mjs`: End-to-end local smoke test (MCP + firmware command).
+- `AIRKVM_SERIAL_PORT=/dev/cu.usbserial-0001 node scripts/mcp-fw-integration.mjs`: End-to-end local MCP↔firmware integration test.
 - `AIRKVM_SAVE_SCREENSHOTS=1 node scripts/mcp-tool-call.mjs airkvm_screenshot_tab '{"request_id":"shot-1","max_width":1280,"max_height":720,"quality":0.6}'`: Run MCP screenshot harness and save image to `temp/`.
 - `node scripts/mcp-tool-call.mjs airkvm_dom_snapshot '{"request_id":"dom-1"}'`: Run MCP DOM snapshot harness call.
 

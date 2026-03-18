@@ -80,10 +80,10 @@ Optional screenshot autosave (for debugging):
 AIRKVM_SAVE_SCREENSHOTS=1 node scripts/mcp-tool-call.mjs airkvm_screenshot_desktop '{"request_id":"shot-desktop-1","desktop_delay_ms":800}'
 ```
 
-Run integrated smoke script:
+Run MCP↔firmware integration script:
 
 ```bash
-AIRKVM_SERIAL_PORT=/dev/cu.usbserial-0001 node scripts/poc-smoke.mjs
+AIRKVM_SERIAL_PORT=/dev/cu.usbserial-0001 node scripts/mcp-fw-integration.mjs
 ```
 
 Firmware monitor:

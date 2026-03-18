@@ -15,8 +15,9 @@
  *   4. Click each button via HID mouse (validates firmware HID mouse path)
  *   5. Verify each button's text appeared in a separate log area
  *   6. Click inside the textarea twice via HID mouse
- *   7. Type all printable ASCII (0x20–0x7E) via key.type
- *   8. Verify textarea contains the typed characters
+ *   7. Type grouped text via key.type, including \n and {Enter}
+ *   8. Correct a typo via key.type using cursor keys and {Backspace}/{Delete}
+ *   9. Verify textarea contains the expected multi-line result
  */
 
 import { spawn } from 'node:child_process';
@@ -32,8 +33,17 @@ const toolTimeoutMs = parseInt(process.env.AIRKVM_TOOL_TIMEOUT_MS || '30000', 10
 const testUrl      = 'https://example.com';
 const absMin       = 0;
 const absMax       = 32767;
-// Printable ASCII: space (0x20) through tilde (0x7E)
-const PRINTABLE_ASCII = Array.from({ length: 0x7E - 0x20 + 1 }, (_, i) => String.fromCharCode(0x20 + i)).join('');
+const DIGITS = '0123456789';
+const UPPERCASE = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const LOWERCASE = 'abcdefghijklmnopqrstuvwxyz';
+const EDIT_START = 'hello worlD';
+const EDIT_FIXUPS = '{Home}{Delete}H{Right}{Right}{Right}{Right},{Right}{Delete}W{End}{Backspace}d!';
+const EXPECTED_TYPED_TEXT = [
+  DIGITS,
+  UPPERCASE,
+  LOWERCASE,
+  'Hello, World!',
+].join('\n');
 
 // ─── Colours ──────────────────────────────────────────────────────────────────
 
@@ -327,12 +337,15 @@ async function runTests(mcp, suite) {
     await sleep(120);
   }
 
-  // ── 6. Type printable ASCII ───────────────────────────────────────────────────
-  suite.section('HID key.type: all printable ASCII (0x20–0x7E)');
-  const chunkSize = 200;
-  for (let offset = 0; offset < PRINTABLE_ASCII.length; offset += chunkSize) {
-    await tool('airkvm_key_type', { text: PRINTABLE_ASCII.slice(offset, offset + chunkSize) });
-  }
+  // ── 6. Type grouped text with special key.type escapes ─────────────────────
+  suite.section('HID key.type: grouped text with \\n and {Enter}');
+  await tool('airkvm_key_type', { text: `${DIGITS}\\n` });
+  await tool('airkvm_key_type', { text: `${UPPERCASE}{Enter}` });
+  await tool('airkvm_key_type', { text: `${LOWERCASE}{Enter}` });
+
+  suite.section('HID key.type: edit typo via arrows + {Backspace}/{Delete}');
+  await tool('airkvm_key_type', { text: EDIT_START });
+  await tool('airkvm_key_type', { text: EDIT_FIXUPS });
 
   // ── 7. Click buttons after typing so later selection/click behavior cannot
   // wipe out the typed payload.
@@ -352,8 +365,8 @@ async function runTests(mcp, suite) {
     await sleep(80);
   }
 
-  // ── 8. Validate via silent injection ──────────────────────────────────────────
-  suite.section('validate: textarea contains ASCII and log contains button presses');
+  // ── 8. Validate via silent injection ────────────────────────────────────────
+  suite.section('validate: textarea contains expected text and log contains button presses');
   const finalRes = parse(await tool('airkvm_inject_js_tab', {
     request_id: reqNum(), tab_id: tabId,
     script: makeGetTextareaScript(),
@@ -367,20 +380,13 @@ async function runTests(mcp, suite) {
   const hidDebug = rawContent?.hid || null;
   suite.assert(finalContent.length > 0, 'textarea is non-empty');
   suite.assert(finalLog.length > 0, 'button log is non-empty');
+  suite.assert(finalContent === EXPECTED_TYPED_TEXT, 'textarea matches expected typed text', finalContent, EXPECTED_TYPED_TEXT);
 
   for (let i = 1; i <= 4; i++) {
     suite.assert(
       finalLog.includes(`Button ${i} Pressed`),
       `contains "Button ${i} Pressed"`,
       null, `Button ${i} Pressed`
-    );
-  }
-
-  for (const ch of [' ', 'A', 'z', '~', '0', '!']) {
-    suite.assert(
-      finalContent.includes(ch),
-      `contains char ${JSON.stringify(ch)} (0x${ch.charCodeAt(0).toString(16).padStart(2, '0')})`,
-      null, ch
     );
   }
 

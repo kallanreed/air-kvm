@@ -59,7 +59,7 @@ const TOOL_DEFINITIONS = [
   {
     name: 'airkvm_mouse_move_abs',
     target: 'hid',
-    description: 'Move the mouse to an absolute coordinate in the target HID absolute range (0..32767).',
+    description: 'Move the mouse to an absolute HID logical coordinate in the 15-bit unsigned range 0..32767. These are not screen pixels.',
     inputSchema: {
       type: 'object',
       properties: {
